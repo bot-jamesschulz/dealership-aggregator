@@ -1,4 +1,12 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {}
+module.exports = {
+    experimental: {
+      serverActions: true,
+      serverComponentsExternalPackages: [
+        'puppeteer-extra', 
+        'puppeteer-extra-plugin-stealth',
+        'puppeteer-extra-plugin-recaptcha',
+      ]
+    }
+  };
 
-module.exports = nextConfig
