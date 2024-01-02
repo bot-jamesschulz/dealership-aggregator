@@ -1,34 +1,30 @@
-
 const puppeteer = require('puppeteer-extra')
 
 // add stealth plugin and use defaults (all evasion techniques)
 const StealthPlugin = require('puppeteer-extra-plugin-stealth')
 puppeteer.use(StealthPlugin())
 
+// Search for anchor content that includes one of the make from vehicleMakes
 async function vehicleTitleAnchorSearch(page,vehicleMakes) {
   let vehicleInfo = {};
+
+  console.log("Searching for anchor titles on:", page.url())
   for (const make of vehicleMakes) {
     const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${make}")]`;
     const elementHandles = await page.$x(xpath);
-
     // Map through elementHandles that contain the make i.e. 'yamaha', and return the text content and href
     const makeElementInfoList = await Promise.all(elementHandles.map(async elementHandle => await page.evaluate(element => ({"content": element.textContent,"href": element.getAttribute("href")}), elementHandle)));
     
-    
-    
     makeElementInfoList.forEach(({ content, href }) => {
-      // Look for a substring of 4 digits
       
+      // Look for a substring of 4 digits
       const yearPattern = /(\d{4})/g;
       const matches = content.match(yearPattern);
       const lowerBound = 1950;
       const upperBound = 2025;
       let validMatches;
-      console.log(`content: ${content}`);
-      console.log(`href: ${href}`);
       // Check if the digit substring is in a year range
       if (matches) {
-        console.log("matches found")
         validMatches = matches.filter(match => {
           const year = parseInt(match);
           return year >= lowerBound && year <= upperBound;
@@ -37,11 +33,13 @@ async function vehicleTitleAnchorSearch(page,vehicleMakes) {
 
       let validUrl;
       if (validMatches) {
+        // Clean string
+        const trimmedContent = content.trim().split('\n')[0];
         validUrl = getNewUrl(href, page);
         if (vehicleInfo[make]) {
-          vehicleInfo[make].push({"title": content, "url": validUrl});
+          vehicleInfo[make].push({"title": trimmedContent, "url": validUrl});
         } else {
-          vehicleInfo[make] = [{"title": content, "url": validUrl}];
+          vehicleInfo[make] = [{"title": trimmedContent, "url": validUrl}];
         }
       } 
     });
@@ -65,6 +63,7 @@ function logNestedObject(obj, indent = '') {
     }
   }
 }
+
 
 function getNewUrl(href,page) {
   let newUrl
@@ -135,43 +134,62 @@ async function sortedAnchorHrefs(page,searchTexts,anchorContentSearch) {
   
 }
 
-async function getHrefs (url, browser) {
+async function goToNewTab(url, browser) {
+  const page = await browser.newPage();
+  await page.goto(url,{ waitUntil: 'networkidle2' });
+  return page;
+}
+
+async function getInventoryPages (url, browser) {
   let page;
   try {
-    page = await browser.newPage();
+    page = await goToNewTab(url,browser);
     let hrefs;
+    let inventoryPages = new Map();
     const inventoryKeywords = ["new","used","all","owned","inventory"];
     const homeKeywords = ["home"];
 
-    await page.goto(url,{ waitUntil: 'networkidle2' });
-    
     // First make sure we are on the home page
     hrefs = await sortedAnchorHrefs(page,homeKeywords);
     if (hrefs["home"]) {
       await page.goto(hrefs["home"],{ waitUntil: 'networkidle2' });
     }
-    // Search for links to
+    // Search for links to inventory pages
     hrefs = await sortedAnchorHrefs(page,inventoryKeywords,"inventory");
-  
-  return hrefs;
+
+    // Decide which inventory pages to create depending on which inventory page types were found
+    if (hrefs["new"]) {
+      inventoryPages.set("new", await goToNewTab(hrefs["new"],browser));  
+      if (hrefs["owned"]) { 
+        inventoryPages.set("owned", await goToNewTab(hrefs["owned"],browser));
+      } else if (hrefs["used"]) {
+        inventoryPages.set("used", await goToNewTab(hrefs["used"],browser));
+      }
+    } else if (hrefs["inventory"]){
+      inventoryPages.set("inventory", await goToNewTab(hrefs["inventory"],browser));
+    } else if (hrefs["all"]) {
+      inventoryPages.set("all", await goToNewTab(hrefs["all"],browser));
+    } else {
+      console.log("No anchors found");
+    }
+
+  console.log("Inventory pages retrieved");
+  return inventoryPages;
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error getting inventory pages:', error);
   } finally {
     await page.close();
   }
 }
 
-async function getBasicInfo(url,browser) {
-  console.log("getting basic info");
+async function getListings(page) {
+  console.log("getting listings on:", page.url());
   const makes = ['benelli', 'beta', 'bmw', 'can-am', 'ducati', 'greenger', 'hisun', 'honda', 'husqvarna', 'indian', 'karavan', 'kawasaki', 'ktm', 'kymco', 'mv agusta', 'polaris', 'ssr', 'stacyc', 'suzuki', 'triumph', 'yamaha'];
-  let page;
   try {
-    page = await browser.newPage();
-    await page.goto(url,{ waitUntil: 'networkidle2' });
-    console.log("on inventory page");
     const listings = await vehicleTitleAnchorSearch(page,makes);
-    console.log(`Listings for: ${url}`);
+    console.log(`Listings for: ${page.url()}`);
     logNestedObject(listings);
+
   } catch (error) {
     console.error('Error:', error);
   } finally {
@@ -186,26 +204,16 @@ export default async function getInfo(urls) {
     // Get the hrefs that link to inventory pages
     let allSitesHrefs = [];
     for (const url of urls) {
-      let hrefs = await getHrefs(url, browser); // Synchronous
+      const inventoryPages = await getInventoryPages(url, browser);
       
-      if (hrefs["new"]) {
-        if (hrefs["owned"]) {
-          await getBasicInfo(hrefs["new"], browser);
-          await getBasicInfo(hrefs["owned"], browser);
-        } else if (hrefs["used"]) {
-          await getBasicInfo(hrefs["new"], browser);
-          await getBasicInfo(hrefs["used"], browser);
-        }
-      } else if (hrefs["inventory"]){
-        await getBasicInfo(hrefs["inventory"], browser);
-      } else if (hrefs["all"]) {
-          await getBasicInfo(hrefs["all"], browser);
-      } else {
-        console.log("No anchors found");
+      for (const  [inventoryType,page] of inventoryPages){
+        console.log(`Getting '${inventoryType}' listings for ${page.url()}`)
+        await getListings(page);
       }
-      allSitesHrefs.push(hrefs);
+
+      allSitesHrefs.push(inventoryPages);
     }
-    //const allSitesHrefs = await Promise.all(urls.map(async url => getHrefs(url,browser))) // Asynchronous
+    //const allSitesHrefs = await Promise.all(urls.map(async url => getInventoryPages(url,browser))) // Asynchronous
     
     //console.log("allSitesHrefs:", allSitesHrefs);
 
