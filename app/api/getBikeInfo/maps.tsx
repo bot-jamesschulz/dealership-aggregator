@@ -80,6 +80,6 @@ export default async function getDealerships() {
         console.log(err.message);
     };
     //return [websites[0],websites[1],websites[3],websites[4],websites[5],websites[6],websites[7],websites[8],websites[9]];
-    return [websites[4]]
-    //return websites.slice(17,20)
+    return [websites[9]]
+    return // websites.slice(0,1)
 };

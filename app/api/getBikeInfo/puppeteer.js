@@ -4,9 +4,10 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-// Search for anchor content that includes one of the make from vehicleMakes
-async function searchForMatchingAnchors(page,vehicleMakes) {
+// Search for anchor content that includes one of the makes from vehicleMakes
+async function pageListings(page, vehicleMakes) {
   let vehicleInfo = {};
+  const listingUrls = [];
 
   // Get all anchor elements
   const anchorHandles = await page.$$('a');
@@ -20,13 +21,16 @@ async function searchForMatchingAnchors(page,vehicleMakes) {
   }));
  
   console.log("Searching for anchor titles on:", page.url())
-  // Look for through anchorData for innerText that includes the make
+  // Look through anchorData for innerText that includes the make
   for (const make of vehicleMakes) {
     
     // Look through anchors that include the make and check if they are valid listings
     anchorData.forEach(({ innerText, href }) => {
-      const trimmedText = innerText.trim().split('\n')[0];
+      const trimmedText = innerText.trim().replace(/\r?\n|\r/,' ');
       
+      // Split the string into an array of words
+      // const words = trimmedText.split(/\s+/);
+
       if (!innerText || !trimmedText.toLowerCase().includes(make)) {
         return;
       };
@@ -46,10 +50,16 @@ async function searchForMatchingAnchors(page,vehicleMakes) {
       // If we have a valid title then add it to vehicleInfo
       if (validMatches) {
         const validUrl = getNewUrl(href, page);
-        if (vehicleInfo[make]) {
-          vehicleInfo[make].push({"title": trimmedText, "url": validUrl});
-        } else {
-          vehicleInfo[make] = [{"title": trimmedText, "url": validUrl}];
+
+        if (!listingUrls.includes(validUrl)) {
+
+          listingUrls.push(validUrl);
+
+          if (vehicleInfo[make]) {   
+              vehicleInfo[make].push({"title": trimmedText, "url": validUrl});
+          } else {
+            vehicleInfo[make] = [{"title": trimmedText, "url": validUrl}];
+          }
         }
       } 
     });
@@ -78,16 +88,27 @@ function logNestedObject(obj, indent = '') {
 
 function getNewUrl(href,page) {
   let newUrl
+  try {
+    if (href.includes("http")) {
+      newUrl = href;
+    } else {
+      const url = page.url();
 
-  if (href.includes("http")) {
-    newUrl = href;
-  } else {
-    const url = page.url();
-    const indexOfDotCom = url.indexOf(".com");
-    newUrl = `${url.substring(0, indexOfDotCom + 4)}${href}`;
+      const domain = new URL(url).origin;
+
+      if (domain) {
+        newUrl = href[0] == '/' ? `${domain}${href}` : `${domain}/${href}`;
+      } else {
+        // If the page URL doesn't have a valid format, use the href as is
+        newUrl = encodeURI(href);
+      }
+    }
+
+    return encodeURI(newUrl)
+  } catch (error) {
+    console.log("Error creating new url:", error)
+    return null
   }
-
-  return encodeURI(newUrl)
 }
 
 async function sortedAnchorHrefs(page,searchTexts,anchorContentSearch) {
@@ -147,7 +168,7 @@ async function sortedAnchorHrefs(page,searchTexts,anchorContentSearch) {
 
 async function goToNewTab(url, browser) {
   const page = await browser.newPage();
-  await page.goto(url,{ waitUntil: 'networkidle0' });
+  await page.goto(url,{ waitUntil: 'networkidle2' });
   return page;
 }
 
@@ -193,71 +214,222 @@ async function getInventoryPages (url, browser) {
   }
 }
 
-async function getNextPage(page) {
+
+async function isValidNextHref(page, url, href, inventoryType) {
+  const maxUrlDifference = 25;
+
   try {
-    console.log("Clicking next");
-    let xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]`;
-    
-    let elementHandles = await page.$x(xpath);
-    if (elementHandles.length > 0) {
-      console.log("clicking anchor");
-      await elementHandles[0].click();
-      console.log("clicked anchor")
-      await page.waitForNetworkIdle({ idleTime: 250 });
+    const nextPageUrl = getNewUrl(href,page);
 
-      return page;
-    } 
-
-    xpath = `//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]`;
-    elementHandles = await page.$x(xpath);
-    if (elementHandles.length > 0) {
-      console.log("clicking span");
-      await elementHandles[0].click();
-      console.log("clicked span")
-      await page.waitForNetworkIdle({ idleTime: 250 });
-
-      return page;
+    // if the next page's url is much longer than the current, we know it is not going to be valid
+    if (nextPageUrl.length - maxUrlDifference > url.length) {
+      console.log("new url is too long")
+      return false
     }
 
-    xpath = `//*[@aria-label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]]`;
-    elementHandles = await page.$x(xpath);
-    if (elementHandles.length > 0) {
-      console.log("clicking aria-label");
-      await elementHandles[0].click();
-      console.log("clicked aria-label");
-      await page.waitForNetworkIdle({ idleTime: 250 });
-      console.log("network is idle");
-      return page;
-    }
-    return null;
-    console.log("Next page loaded");
+    const includesType = href.toLowerCase().includes(inventoryType);
     
+    if (!href.includes('http')) {
+      if (includesType) {
+        return true;
+      }
+      else {
+        return false;
+      }
+    }
+
+    const urlDomain = new URL(url)?.hostname;
+    const hrefDomain = new URL(href)?.hostname;
+
+    console.log(`urlDomain: ${urlDomain} | hrefDomain: ${hrefDomain} | inventoryType: ${inventoryType} | includesType: ${includesType}`)
+    
+    return urlDomain == hrefDomain && includesType
   } catch (error) {
-    console.error('Error:', error);
+    console.log("Error validating href:", error)
   }
 }
 
-async function getListings(page) {
-  console.log("getting listings on:", page.url());
-  const makes = ['benelli', 'beta', 'bmw', 'can-am', 'ducati', 'greenger', 'harley',  'hisun', 'honda', 'husqvarna', 'indian', 'karavan', 'kawasaki', 'ktm', 'kayo', 'kymco', 'moke', 'mv agusta', 'polaris', 'ssr', 'stacyc', 'suzuki', 'triumph', 'yamaha'];
+async function clickNextElement(page, nextElement, inventoryType) {
   try {
-    const listings = await searchForMatchingAnchors(page, makes);
-    console.log(`Listings for: ${page.url()}`);
+    
+    // Determine if the element is inside an anchor
+    const isAnchor = await page.evaluate((nextElement) => {
+      let currentElement = nextElement;
+      do {
+        const tagName = nextElement.tagName;
+        if (tagName === "A") {
+          return true
+        }
+        currentElement = currentElement.parentElement;
+      } while (currentElement)
+      return false
+    }, nextElement);
+
+    // If the element is in an anchor, then wait for page navigation.
+    if (isAnchor) {
+
+      try {
+        // Ensure the link is going to the next page and not to another site
+        const url = await page.url();
+        const href = await nextElement.evaluate(elem => elem.getAttribute('href'));
+        console.log("Trying anchor:", href)
+        if (!await isValidNextHref(page, url, href, inventoryType)) {
+          console.log("Invalid href", href)
+          return null;
+        }
+
+        console.log(`Clicking anchor ${href}`)
+        await Promise.all([
+          page.waitForNavigation({ timeout: 10000 }),
+          nextElement.click() 
+        ]);
+      } catch (error) {
+        console.log("Error clicking anchor", error);
+      }
+    } else {
+      console.log(`Clicking non-anchor`)
+
+
+      // Get the cursor type
+      const cursorType = await page.evaluate((nextElement) => {
+        const computedStyle = window.getComputedStyle(nextElement);
+        return computedStyle.cursor;
+      }, nextElement);
+
+      if (cursorType != "pointer") {
+        return null
+      }
+
+
+      // Element is not part of an anchor
+      let requestCount = 0;
+      let responseCount = 0;
+      await page.setRequestInterception(true);
+      page.on('request', interceptedRequest => {
+        requestCount++;
+        console.log("request #", requestCount)
+        if (interceptedRequest.isInterceptResolutionHandled()) return;
+          else interceptedRequest.continue();
+      });
+      page.on('response', response => {
+        responseCount++;
+        console.log("response #", responseCount);
+      });
+      
+      const urlNums = await page.url().match(/\d+/g)?.join();
+      await nextElement.click();
+
+
+      const timeout = 15000; // 15 seconds
+      const startTime = Date.now();
+      let prevRequestCount;
+      let prevResponseCount;
+      do {
+          
+          prevRequestCount = requestCount;
+          prevResponseCount = responseCount;
+          
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          console.log("Request count:", requestCount);
+          console.log("Response count:", responseCount);
+          if ( requestCount == prevRequestCount && responseCount == prevResponseCount) {
+            break;
+          }
+      } while ((responseCount < requestCount || Date.now() - startTime < timeout))
+
+
+    }  
+    console.log("clicked next element");
+    return page;
+  } catch (error) {
+    console.log("Error clicking next page", error)
+    return null;
+  } finally {
+    page.off('request');
+    page.off('response');
+  }
+}
+
+// Find the next page navigation and return the navigated page
+async function getNextPage(page, inventoryType) {
+  const xpaths = [
+    `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]`,
+    `//*[@aria-label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]]`,
+    `//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]`
+  ];
+  try {
+    console.log("getting next page");
+    
+    for (const xpath of xpaths) {
+      const elementHandles = await page.$x(xpath);
+      // Attempt to click each element
+      for (const handle of elementHandles) {
+        const nextPage = await clickNextElement(page, handle, inventoryType);
+        if (nextPage) {
+          console.log("element clicked"); 
+          // Successfully retrieved the next page
+          return nextPage
+        }
+      }
+    }
+
+    return null;
+    
+  } catch (error) {
+    console.error('Error getting next page:', error);
+  }
+}
+
+async function allPageListings(page, inventoryType, listingsData = []) {
+  const makes = ['agusta', 'aprilia', 'benelli', 'bmw', 'can-am', 'cf moto', 'ducati', 'greenger', 'guzzi', 'harley',  'hisun', 'honda', 'husqvarna', 'indian', 'karavan', 'kawasaki', 'ktm', 'kymco', 'mv agusta', 'polaris', 'royal enfield ', 'ssr', 'stacyc', 'suzuki', 'triumph', 'yamaha', 'beta', 'kayo', 'moke'];
+  try {
+    // Search for listings on the current page
+    const url= page.url();
+    console.log("getting listings on:", url);
+    const listings = await pageListings(page, makes);
+
+
+    // Add the listings to the aggregate map
+    if (listings) {
+      const listingsCount = Object.values(listings)
+        .reduce((acc, arr) => acc + arr.length, 0);
+      listingsData.push({
+        pageCount: listingsData.length + 1,
+        url,
+        listingsCount
+      })
+    }
+
+    
+    console.log(`Listings for: ${url}`);
     logNestedObject(listings);
+    
+
     const currentPageContent = await page.content();
     
-    const nextPage = await getNextPage(page);
-    console.log("Next page loaded")
-    const nextPageContent = await nextPage.content();
-
-    if (currentPageContent != nextPageContent) {
-      await getListings(nextPage);
+    // Retrieve the next page
+    const nextPage = await getNextPage(page, inventoryType);
+    if (!nextPage) {
+      console.log("No clickable next page elements found");
+      return;
     }
-    
-    return 
+    console.log("Next page loaded")
+
+
+    // Compare the HTML content of the old page with the new
+    const nextPageContent = await nextPage.content();
+    // Keep searching if they are different
+    if (currentPageContent != nextPageContent) {
+      
+      await allPageListings(nextPage, inventoryType, listingsData);
+    }
+
+    console.log("End of inventory"); 
   } catch (error) {
-    console.error('Error:', error);
-  } 
+    console.error('Error getting listings:', error);
+  } finally {
+    return listingsData;
+  }
 }
 
 export default async function getInfo(urls) {
@@ -265,24 +437,28 @@ export default async function getInfo(urls) {
   try {
     browser = await puppeteer.launch({headless: false});
     // Get the hrefs that link to inventory pages
-    let allSitesHrefs = [];
+    let allSitesListings = {};
+    let inventoryUrl;
     for (const url of urls) {
-      const inventoryPages = await getInventoryPages(url, browser);
-      
-      for (const  [inventoryType,page] of inventoryPages){
-        console.log(`Getting '${inventoryType}' listings for ${page.url()}`)
-        await page.bringToFront();
-        await getListings(page);
-        await page.close();
+      // const inventoryPages = await getInventoryPages(url, browser);
+
+      const page = await goToNewTab("https://mtnride.com/Showroom/New-Inventory/New?page=26",browser);
+      const inventoryPages = new Map([["new", page]]);
+      try {
+        for (const  [inventoryType,page] of inventoryPages){
+          inventoryUrl = page.url()
+          console.log(`Getting '${inventoryType}' listings for ${inventoryUrl}`)
+          await page.bringToFront();
+          const listings = await allPageListings(page, inventoryType);
+          allSitesListings[inventoryUrl] = listings;
+          await page.close();
+        }
+      } catch(error) {
+        console.log(`Error getting listings for ${inventoryUrl}`)
       }
 
-      allSitesHrefs.push(inventoryPages);
+      console.log(`All listings ${JSON.stringify(allSitesListings, null, 2)}`)
     }
-    //const allSitesHrefs = await Promise.all(urls.map(async url => getInventoryPages(url,browser))) // Asynchronous
-    
-    //console.log("allSitesHrefs:", allSitesHrefs);
-
-  
 
     return "All the info";
 
