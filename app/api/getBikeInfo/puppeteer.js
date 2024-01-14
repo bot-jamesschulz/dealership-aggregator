@@ -35,8 +35,25 @@ async function pageListings(page, vehicleMakes) {
         return;
       };
 
-      // Look substrings of 4 digits
+      // First word should either be a 4 digit number or a keyword
       const yearPattern = /(\d{4})/g;
+      const validFirstWords = ['owned', 'new', 'used'];
+      const words = trimmedText.split(/\s+/);
+      const firstWord = words[0];
+
+      const isValidFirstWord = validFirstWords.some(validWord => firstWord.toLowerCase().includes(validWord)) ||  yearPattern.test(firstWord);
+
+      if (firstWord.includes("PRINT")) {
+        console.log("InnerText:", innerText);
+        console.log("TrimmedText:", trimmedText);
+       
+        console.log("first word:", firstWord);
+      }
+      if (!isValidFirstWord) {
+        return;
+      }
+
+      // Look for substrings of 4 digits
       const matches = trimmedText.match(yearPattern);
       const lowerBound = 1950;
       const upperBound = 2025;
@@ -287,6 +304,7 @@ async function clickNextElement(page, nextElement, inventoryType) {
         console.log("Error clicking anchor", error);
       }
     } else {
+      // Element is not part of an anchor
       console.log(`Clicking non-anchor`)
 
 
@@ -301,19 +319,19 @@ async function clickNextElement(page, nextElement, inventoryType) {
       }
 
 
-      // Element is not part of an anchor
+      // Monitor requests and responses
       let requestCount = 0;
       let responseCount = 0;
       await page.setRequestInterception(true);
       page.on('request', interceptedRequest => {
         requestCount++;
-        console.log("request #", requestCount)
+        // console.log("request #", requestCount)
         if (interceptedRequest.isInterceptResolutionHandled()) return;
           else interceptedRequest.continue();
       });
       page.on('response', response => {
         responseCount++;
-        console.log("response #", responseCount);
+        // console.log("response #", responseCount);
       });
       
       const urlNums = await page.url().match(/\d+/g)?.join();
@@ -335,7 +353,7 @@ async function clickNextElement(page, nextElement, inventoryType) {
           if ( requestCount == prevRequestCount && responseCount == prevResponseCount) {
             break;
           }
-      } while ((responseCount < requestCount || Date.now() - startTime < timeout))
+      } while ((responseCount < requestCount && Date.now() - startTime < timeout))
 
 
     }  
@@ -442,7 +460,7 @@ export default async function getInfo(urls) {
     for (const url of urls) {
       // const inventoryPages = await getInventoryPages(url, browser);
 
-      const page = await goToNewTab("https://mtnride.com/Showroom/New-Inventory/New?page=26",browser);
+      const page = await goToNewTab(" https://www.motounitedwhittier.com/default.asp?page=xnewinventory#page=xnewinventory&p=1",browser);
       const inventoryPages = new Map([["new", page]]);
       try {
         for (const  [inventoryType,page] of inventoryPages){
