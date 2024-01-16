@@ -53,6 +53,27 @@ export default async function getDealerships() {
         'http://www.arcadiamotorcycleco.com/'
     ];
 
+    const testingWebsites = [
+        'http://www.mtnride.com/?utm_source=google&utm_medium=organic&utm_campaign=GMB-service',
+        'http://www.lacyclesports.com/',
+        'https://www.motounitedbellflower.com/?utm_source=GMBlisting&utm_medium=organic',
+        'http://www.bertsmegamall.com/?utm_source=google&utm_medium=organic&utm_campaign=GMB-service',
+
+        'http://hondaofglendale.com/',
+        'https://redondobeach.delamomotorsports.com/?utm_source=google&utm_medium=organic&utm_campaign=GMB-service',
+        'http://www.nextmotorcycle.com/',
+        'http://socalhondapowersports.com/',
+
+        'http://www.ocmotorcycle.com/',
+        'http://www.socalmotorcycles.com/',
+        'https://orangehonda.com/?utm_source=google&utm_medium=organic&utm_campaign=google_my_business&utm_content=website_button',
+        'http://www.maalimotorsports.com/',
+
+        'https://www.farhanenterprises.net/',
+        'http://hbhonda.com/',
+        'http://www.arcadiamotorcycleco.com/'
+    ];
+
     const placesNearbyConfig = {
         method: 'get',
         url: `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=34%2C-118&radius=50000&keyword=motorcycle dealership&key=${mapsKey}`,
@@ -81,5 +102,6 @@ export default async function getDealerships() {
     };
     //return [websites[0],websites[1],websites[3],websites[4],websites[5],websites[6],websites[7],websites[8],websites[9]];
     //return [websites[9]]
-    return websites.slice(5,11)
+    //return websites.slice(0,20)
+    return testingWebsites.slice(14,15);
 };

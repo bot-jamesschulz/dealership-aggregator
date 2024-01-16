@@ -43,12 +43,6 @@ async function pageListings(page, vehicleMakes) {
 
       const isValidFirstWord = validFirstWords.some(validWord => firstWord.toLowerCase().includes(validWord)) ||  yearPattern.test(firstWord);
 
-      if (firstWord.includes("PRINT")) {
-        console.log("InnerText:", innerText);
-        console.log("TrimmedText:", trimmedText);
-       
-        console.log("first word:", firstWord);
-      }
       if (!isValidFirstWord) {
         return;
       }
@@ -190,11 +184,10 @@ async function goToNewTab(url, browser) {
 }
 
 async function getInventoryPages (url, browser) {
-  let page;
+  let page, hrefs;
+  let inventoryPages = new Map();
   try {
     page = await goToNewTab(url,browser);
-    let hrefs;
-    let inventoryPages = new Map();
     const inventoryKeywords = ["new","used","all","owned","inventory"];
     const homeKeywords = ["home"];
 
@@ -226,8 +219,9 @@ async function getInventoryPages (url, browser) {
   return inventoryPages;
   } catch (error) {
     console.error('Error getting inventory pages:', error);
+    return null;
   } finally {
-    await page.close();
+    await page?.close();
   }
 }
 
@@ -264,6 +258,10 @@ async function isValidNextHref(page, url, href, inventoryType) {
   } catch (error) {
     console.log("Error validating href:", error)
   }
+}
+
+async function delay(length) {
+  await new Promise(resolve => setTimeout(resolve, length));
 }
 
 async function clickNextElement(page, nextElement, inventoryType) {
@@ -306,7 +304,8 @@ async function clickNextElement(page, nextElement, inventoryType) {
     } else {
       // Element is not part of an anchor
       console.log(`Clicking non-anchor`)
-
+      // const outerHTML = await nextElement.evaluate(node => node.outerHTML);
+      // console.log(`OuterHTML of clicked element: ${outerHTML}`);
 
       // Get the cursor type
       const cursorType = await page.evaluate((nextElement) => {
@@ -322,6 +321,9 @@ async function clickNextElement(page, nextElement, inventoryType) {
       // Monitor requests and responses
       let requestCount = 0;
       let responseCount = 0;
+      let isNavigating = false;
+      let navigationEvent = false;
+      let loadEvent = false;
       await page.setRequestInterception(true);
       page.on('request', interceptedRequest => {
         requestCount++;
@@ -333,29 +335,68 @@ async function clickNextElement(page, nextElement, inventoryType) {
         responseCount++;
         // console.log("response #", responseCount);
       });
+      page.on('load', () => {
+        loadEvent = true;
+      });
+      try {
+        await page.exposeFunction('onBeforeUnload', () => {
+          navigationEvent = true;
+          isNavigating = true;
+        });
+      } catch (error) {}
+    
+      await page.evaluate(() => {
+        window.unloadHandler = () => window.onBeforeUnload();
+
+        window.addEventListener('beforeunload', unloadHandler);
+      });
       
       const urlNums = await page.url().match(/\d+/g)?.join();
       await nextElement.click();
 
-
+      // Wait for the network to be idle
       const timeout = 15000; // 15 seconds
       const startTime = Date.now();
-      let prevRequestCount;
-      let prevResponseCount;
+      let networkIdle, withinTimeout, navigationEventFinished;
       do {
-          
-          prevRequestCount = requestCount;
-          prevResponseCount = responseCount;
-          
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          const prevRequestCount = requestCount;
+          const prevResponseCount = responseCount;
+        
+          await delay(500);
+
+          const requestChanged = requestCount !== prevRequestCount;
+          const responseChanged = responseCount !== prevResponseCount;
+
+          networkIdle = !requestChanged && !responseChanged && responseCount > 1;
+          navigationEventFinished = loadEvent && responseCount > 1;
+          withinTimeout = Date.now() - startTime < timeout;
+
           console.log("Request count:", requestCount);
           console.log("Response count:", responseCount);
-          if ( requestCount == prevRequestCount && responseCount == prevResponseCount) {
+          console.log(`Isnavigating: ${isNavigating}`);
+          console.log(`navigationEvenFinished: ${navigationEventFinished}`);
+
+          if (navigationEventFinished) {
             break;
           }
-      } while ((responseCount < requestCount && Date.now() - startTime < timeout))
-
-
+          if (networkIdle) {
+            try {
+              const pageLoaded = await page.evaluate(() => {
+                return document.readyState === 'complete';
+              });
+              if (pageLoaded) {
+                break;
+              }
+            } catch(error) {
+              console.log("Error accessing document ready state:", error);
+            }
+          }
+          // console.log(`networkIdle: ${networkIdle} | requestsFulfilled: ${requestsFulfilled} | withinTimeout: ${withinTimeout}`);
+      } while (withinTimeout);
+      
+      // console.log("Request count after polling:", requestCount);
+      // console.log("Response count after polling:", responseCount);
+      // console.log(`Isnavigating after polling: ${isNavigating}`)
     }  
     console.log("clicked next element");
     return page;
@@ -363,8 +404,8 @@ async function clickNextElement(page, nextElement, inventoryType) {
     console.log("Error clicking next page", error)
     return null;
   } finally {
-    page.off('request');
-    page.off('response');
+    page?.off('request');
+    page?.off('response');
   }
 }
 
@@ -419,7 +460,7 @@ async function allPageListings(page, inventoryType, listingsData = []) {
     }
 
     
-    console.log(`Listings for: ${url}`);
+    console.log(`Listings for page ${listingsData.length + 1}: ${url}`);
     logNestedObject(listings);
     
 
@@ -427,12 +468,13 @@ async function allPageListings(page, inventoryType, listingsData = []) {
     
     // Retrieve the next page
     const nextPage = await getNextPage(page, inventoryType);
+    console.log("getNextPage returned");
     if (!nextPage) {
       console.log("No clickable next page elements found");
       return;
     }
-    console.log("Next page loaded")
 
+    console.log("Next page loaded")
 
     // Compare the HTML content of the old page with the new
     const nextPageContent = await nextPage.content();
@@ -458,10 +500,10 @@ export default async function getInfo(urls) {
     let allSitesListings = {};
     let inventoryUrl;
     for (const url of urls) {
-      // const inventoryPages = await getInventoryPages(url, browser);
+      const inventoryPages = await getInventoryPages(url, browser);
 
-      const page = await goToNewTab(" https://www.motounitedwhittier.com/default.asp?page=xnewinventory#page=xnewinventory&p=1",browser);
-      const inventoryPages = new Map([["new", page]]);
+      // const page = await goToNewTab("https://www.bertsmegamall.com/--inventory?condition=new&pg=1&sortby=inventory%7cdesc",browser);
+      // const inventoryPages = new Map([["new", page]]);
       try {
         for (const  [inventoryType,page] of inventoryPages){
           inventoryUrl = page.url()
