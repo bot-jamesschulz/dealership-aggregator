@@ -103,5 +103,5 @@ export default async function getDealerships() {
     //return [websites[0],websites[1],websites[3],websites[4],websites[5],websites[6],websites[7],websites[8],websites[9]];
     //return [websites[9]]
     //return websites.slice(0,20)
-    return testingWebsites.slice(14,15);
+    return testingWebsites.slice(3,4);
 };

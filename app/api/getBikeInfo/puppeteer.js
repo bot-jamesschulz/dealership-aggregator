@@ -50,7 +50,7 @@ async function pageListings(page, vehicleMakes) {
       // Look for substrings of 4 digits
       const matches = trimmedText.match(yearPattern);
       const lowerBound = 1950;
-      const upperBound = 2025;
+      const upperBound = new Date().getFullYear() + 2;
       
       // Check if any of the digit substrings are in the correct range
       const validMatches = matches?.find(match => {
@@ -264,139 +264,143 @@ async function delay(length) {
   await new Promise(resolve => setTimeout(resolve, length));
 }
 
-async function clickNextElement(page, nextElement, inventoryType) {
+async function isElementInsideAnchor(page, element) {
+  return page.evaluate((element) => {
+    let currentElement = element;
+    do {
+      if (currentElement.tagName === "A") {
+        return true;
+      }
+      currentElement = currentElement.parentElement;
+    } while (currentElement);
+    return false;
+  }, element);
+}
+
+async function handleAnchorElement(page, nextElement, inventoryType) {
   try {
-    
-    // Determine if the element is inside an anchor
-    const isAnchor = await page.evaluate((nextElement) => {
-      let currentElement = nextElement;
-      do {
-        const tagName = nextElement.tagName;
-        if (tagName === "A") {
-          return true
-        }
-        currentElement = currentElement.parentElement;
-      } while (currentElement)
-      return false
+    // Ensure the link is going to the next page and not to another site
+    const url = await page.url();
+    const href = await nextElement.evaluate(elem => elem.getAttribute('href'));
+    console.log("Trying anchor:", href)
+    if (!await isValidNextHref(page, url, href, inventoryType)) {
+      console.log("Invalid href", href)
+      return null;
+    }
+
+    console.log(`Clicking anchor ${href}`)
+    await Promise.all([
+      page.waitForNavigation({ timeout: 10000 }),
+      nextElement.click() 
+    ]);
+  } catch (error) {
+    console.log("Error clicking anchor", error);
+  }
+  
+}
+
+async function handleNonAnchorElement(page, nextElement) {
+  const DELAY_MS = 500;
+  const TIMEOUT_MS = 15000;
+
+  // Element is not part of an anchor
+  console.log(`Clicking non-anchor`)
+  // const outerHTML = await nextElement.evaluate(node => node.outerHTML);
+  // console.log(`OuterHTML of clicked element: ${outerHTML}`);
+
+  try {
+
+    // Get the cursor type
+    const cursorType = await page.evaluate((nextElement) => {
+      const computedStyle = window.getComputedStyle(nextElement);
+      return computedStyle.cursor;
     }, nextElement);
 
-    // If the element is in an anchor, then wait for page navigation.
-    if (isAnchor) {
-
-      try {
-        // Ensure the link is going to the next page and not to another site
-        const url = await page.url();
-        const href = await nextElement.evaluate(elem => elem.getAttribute('href'));
-        console.log("Trying anchor:", href)
-        if (!await isValidNextHref(page, url, href, inventoryType)) {
-          console.log("Invalid href", href)
-          return null;
-        }
-
-        console.log(`Clicking anchor ${href}`)
-        await Promise.all([
-          page.waitForNavigation({ timeout: 10000 }),
-          nextElement.click() 
-        ]);
-      } catch (error) {
-        console.log("Error clicking anchor", error);
-      }
-    } else {
-      // Element is not part of an anchor
-      console.log(`Clicking non-anchor`)
-      // const outerHTML = await nextElement.evaluate(node => node.outerHTML);
-      // console.log(`OuterHTML of clicked element: ${outerHTML}`);
-
-      // Get the cursor type
-      const cursorType = await page.evaluate((nextElement) => {
-        const computedStyle = window.getComputedStyle(nextElement);
-        return computedStyle.cursor;
-      }, nextElement);
-
-      if (cursorType != "pointer") {
-        return null
-      }
+    if (cursorType != "pointer") {
+      return null
+    }
 
 
-      // Monitor requests and responses
-      let requestCount = 0;
-      let responseCount = 0;
-      let isNavigating = false;
-      let navigationEvent = false;
-      let loadEvent = false;
-      await page.setRequestInterception(true);
-      page.on('request', interceptedRequest => {
-        requestCount++;
-        // console.log("request #", requestCount)
-        if (interceptedRequest.isInterceptResolutionHandled()) return;
-          else interceptedRequest.continue();
-      });
-      page.on('response', response => {
-        responseCount++;
-        // console.log("response #", responseCount);
-      });
-      page.on('load', () => {
-        loadEvent = true;
-      });
-      try {
-        await page.exposeFunction('onBeforeUnload', () => {
-          navigationEvent = true;
-          isNavigating = true;
-        });
-      } catch (error) {}
+    // Monitor requests and responses
+    let requestCount = 0;
+    let responseCount = 0;
+    let loadEvent = false;
+    await page.setRequestInterception(true);
+    page.on('request', interceptedRequest => {
+      requestCount++;
+      // console.log("request #", requestCount)
+      if (interceptedRequest.isInterceptResolutionHandled()) return;
+        else interceptedRequest.continue();
+    });
+    page.on('response', response => {
+      responseCount++;
+      // console.log("response #", responseCount);
+    });
+    page.on('load', () => {
+      loadEvent = true;
+    });
+
+    await page.evaluate(() => {
+      window.unloadHandler = () => window.onBeforeUnload();
+
+      window.addEventListener('beforeunload', unloadHandler);
+    });
     
-      await page.evaluate(() => {
-        window.unloadHandler = () => window.onBeforeUnload();
+    await nextElement.click();
 
-        window.addEventListener('beforeunload', unloadHandler);
-      });
+    // Wait for the network to be idle
+    const timeout = TIMEOUT_MS;
+    const startTime = Date.now();
+    let networkIdle, withinTimeout, navigationEventFinished;
+    do {
+        const prevRequestCount = requestCount;
+        const prevResponseCount = responseCount;
       
-      const urlNums = await page.url().match(/\d+/g)?.join();
-      await nextElement.click();
+        await delay(DELAY_MS);
 
-      // Wait for the network to be idle
-      const timeout = 15000; // 15 seconds
-      const startTime = Date.now();
-      let networkIdle, withinTimeout, navigationEventFinished;
-      do {
-          const prevRequestCount = requestCount;
-          const prevResponseCount = responseCount;
-        
-          await delay(500);
+        networkIdle = requestCount === prevRequestCount && responseCount === prevResponseCount && responseCount > 1;
+        navigationEventFinished = loadEvent && responseCount > 1;
+        withinTimeout = Date.now() - startTime < timeout;
 
-          const requestChanged = requestCount !== prevRequestCount;
-          const responseChanged = responseCount !== prevResponseCount;
+        console.log("Request count:", requestCount);
+        console.log("Response count:", responseCount);
+        console.log(`navigationEvenFinished: ${navigationEventFinished}`);
 
-          networkIdle = !requestChanged && !responseChanged && responseCount > 1;
-          navigationEventFinished = loadEvent && responseCount > 1;
-          withinTimeout = Date.now() - startTime < timeout;
-
-          console.log("Request count:", requestCount);
-          console.log("Response count:", responseCount);
-          console.log(`Isnavigating: ${isNavigating}`);
-          console.log(`navigationEvenFinished: ${navigationEventFinished}`);
-
-          if (navigationEventFinished) {
-            break;
-          }
-          if (networkIdle) {
-            try {
-              const pageLoaded = await page.evaluate(() => {
-                return document.readyState === 'complete';
-              });
-              if (pageLoaded) {
-                break;
-              }
-            } catch(error) {
-              console.log("Error accessing document ready state:", error);
+        if (navigationEventFinished) {
+          break;
+        }
+        if (networkIdle) {
+          try {
+            const pageLoaded = await page.evaluate(() => {
+              return document.readyState === 'complete';
+            });
+            if (pageLoaded) {
+              break;
             }
+          } catch(error) {
+            console.log("Error accessing document ready state:", error);
           }
-          // console.log(`networkIdle: ${networkIdle} | requestsFulfilled: ${requestsFulfilled} | withinTimeout: ${withinTimeout}`);
-      } while (withinTimeout);
-      
-      // console.log("Request count after polling:", requestCount);
-      // console.log("Response count after polling:", responseCount);
-      // console.log(`Isnavigating after polling: ${isNavigating}`)
+        }
+        // console.log(`networkIdle: ${networkIdle} | requestsFulfilled: ${requestsFulfilled} | withinTimeout: ${withinTimeout}`);
+    } while (withinTimeout);
+    
+    // console.log("Request count after polling:", requestCount);
+    // console.log("Response count after polling:", responseCount);
+    // console.log(`Isnavigating after polling: ${isNavigating}`)
+  } catch (error) {
+    console.log("Error clicking non-anchor", error);
+  }
+}
+
+async function clickNextElement(page, nextElement, inventoryType) {
+  try {
+    const isInsideAnchor = await isElementInsideAnchor(page, nextElement);
+
+    // If the element is in an anchor, then wait for page navigation.
+    if (isInsideAnchor) {
+      await handleAnchorElement(page, nextElement, inventoryType);
+    } else {
+      await handleNonAnchorElement(page, nextElement);
     }  
     console.log("clicked next element");
     return page;
@@ -450,8 +454,7 @@ async function allPageListings(page, inventoryType, listingsData = []) {
 
     // Add the listings to the aggregate map
     if (listings) {
-      const listingsCount = Object.values(listings)
-        .reduce((acc, arr) => acc + arr.length, 0);
+      const listingsCount = Object.values(listings).reduce((acc, arr) => acc + arr.length, 0);
       listingsData.push({
         pageCount: listingsData.length + 1,
         url,
@@ -459,11 +462,9 @@ async function allPageListings(page, inventoryType, listingsData = []) {
       })
     }
 
-    
     console.log(`Listings for page ${listingsData.length + 1}: ${url}`);
     logNestedObject(listings);
     
-
     const currentPageContent = await page.content();
     
     // Retrieve the next page

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import './lookup.css';
 import SearchBar from './SearchBar';
 import Results from './Results';
+import MapTest from './MapTest';
 
 export default function Lookup() {
 
@@ -35,6 +36,9 @@ export default function Lookup() {
           </div>
           <div className="results">
             <Results results={results}/>
+          </div>
+          <div className="map">
+            <MapTest />
           </div>
         </div>
     )
