@@ -122,6 +122,13 @@ function getNewUrl(href,page) {
   }
 }
 
+/**
+ * Retrieves sorted anchor hrefs based on search criteria.
+ * @param {Page} page - The Puppeteer page object.
+ * @param {string[]} searchTexts - An array of keywords to search for.
+ * @param {string} anchorContentSearch - The keyword to search for in the text content of the anchors.
+ * @returns {Object} - An object containing the sorted hrefs.
+ */
 async function sortedAnchorHrefs(page,searchTexts,anchorContentSearch) {
   let sortedHrefs = {};
 
@@ -132,11 +139,11 @@ async function sortedAnchorHrefs(page,searchTexts,anchorContentSearch) {
     
     if (elementHandles.length > 0) {
       // Pull the hrefs from the anchors
-      const tempHrefs = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => element.getAttribute('href').toLowerCase(), elem)));
+      const hrefs = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => element.getAttribute('href'), elem)));
       
       // Keywords to search for in the hrefs. Find the one for each and add them to matchHref if they exist
       for (const keyword of searchTexts) {
-        const matchingHref = tempHrefs.find(href => href.includes(keyword));
+        const matchingHref = hrefs.find(href => href.toLowerCase().includes(keyword));
         let newUrl;
         if (matchingHref) {
           if (matchingHref.includes("http")) {
@@ -158,7 +165,7 @@ async function sortedAnchorHrefs(page,searchTexts,anchorContentSearch) {
       const elementHandles = await page.$x(xpath);
       
       if (elementHandles.length > 0) {
-        const href = await page.evaluate(element => element.getAttribute('href').toLowerCase(), elementHandles[0]);
+        const href = await page.evaluate(element => element.getAttribute('href'), elementHandles[0]);
 
         let newUrl;
         if (href.includes("http")) {
@@ -183,6 +190,15 @@ async function goToNewTab(url, browser) {
   return page;
 }
 
+
+/**
+ * Retrieves the inventory pages for a given URL.
+ * 
+ * @param {string} url - The URL to navigate to.
+ * @param {object} browser - The browser instance.
+ * @returns {Map} - A Map containing the inventory pages.
+ * @throws {Error} - If there is an error getting the inventory pages.
+ */
 async function getInventoryPages (url, browser) {
   let page, hrefs;
   let inventoryPages = new Map();
@@ -194,11 +210,13 @@ async function getInventoryPages (url, browser) {
     // First make sure we are on the home page
     hrefs = await sortedAnchorHrefs(page,homeKeywords);
     if (hrefs["home"]) {
-      await page.goto(hrefs["home"],{ waitUntil: 'networkidle2' });
+      console.log("Going to home page")
+      const urlObject = new URL(hrefs["home"], page.url());
+      await page.goto(urlObject.href,{ waitUntil: 'networkidle2' });
     }
     // Search for links to inventory pages
     hrefs = await sortedAnchorHrefs(page,inventoryKeywords,"inventory");
-
+    console.log("hrefs:", hrefs);
     // Decide which inventory pages to create depending on which inventory page types were found
     if (hrefs["new"]) {
       inventoryPages.set("new", await goToNewTab(hrefs["new"],browser));  
@@ -226,12 +244,20 @@ async function getInventoryPages (url, browser) {
 }
 
 
-async function isValidNextHref(page, url, href, inventoryType) {
+/**
+ * Checks if the next href is valid based on certain conditions.
+ * @param {Page} page - The Puppeteer page object.
+ * @param {string} url - The current URL.
+ * @param {string} href - The href of the next page navigation element to be validated.
+ * @param {string} inventoryType - The type of inventory (new, used...).
+ * @returns {boolean} - Returns true if the next href is valid, otherwise false.
+ */
+function isValidNextHref(page, url, href, inventoryType) {
   const maxUrlDifference = 25;
 
   try {
     const nextPageUrl = getNewUrl(href,page);
-
+    console.log(`nextPageUrl: ${nextPageUrl} | url: ${url} | inventoryType: ${inventoryType}`)
     // if the next page's url is much longer than the current, we know it is not going to be valid
     if (nextPageUrl.length - maxUrlDifference > url.length) {
       console.log("new url is too long")
@@ -277,13 +303,22 @@ async function isElementInsideAnchor(page, element) {
   }, element);
 }
 
+
+/**
+ * Handles the click event on an anchor element.
+ * 
+ * @param {Page} page - The Puppeteer page object.
+ * @param {ElementHandle} nextElement - The anchor element to click.
+ * @param {string} inventoryType - The type of inventory.
+ * @returns {Page|null} - The updated page object or null if an error occurred.
+ */
 async function handleAnchorElement(page, nextElement, inventoryType) {
   try {
     // Ensure the link is going to the next page and not to another site
     const url = await page.url();
     const href = await nextElement.evaluate(elem => elem.getAttribute('href'));
     console.log("Trying anchor:", href)
-    if (!await isValidNextHref(page, url, href, inventoryType)) {
+    if (!isValidNextHref(page, url, href, inventoryType)) {
       console.log("Invalid href", href)
       return null;
     }
@@ -293,12 +328,20 @@ async function handleAnchorElement(page, nextElement, inventoryType) {
       page.waitForNavigation({ timeout: 10000 }),
       nextElement.click() 
     ]);
+    return page;
   } catch (error) {
     console.log("Error clicking anchor", error);
-  }
-  
+    return null
+  } 
 }
 
+
+/**
+ * Handles a non-anchor element by clicking on it and monitoring network activity.
+ * @param {Page} page - The Puppeteer page object.
+ * @param {ElementHandle} nextElement - The element to be clicked.
+ * @returns {Promise<Page|null>} - The Puppeteer page object if the click is successful and network activity is monitored, or null if the element cannot be clicked.
+ */
 async function handleNonAnchorElement(page, nextElement) {
   const DELAY_MS = 500;
   const TIMEOUT_MS = 15000;
@@ -387,33 +430,55 @@ async function handleNonAnchorElement(page, nextElement) {
     // console.log("Request count after polling:", requestCount);
     // console.log("Response count after polling:", responseCount);
     // console.log(`Isnavigating after polling: ${isNavigating}`)
-  } catch (error) {
-    console.log("Error clicking non-anchor", error);
-  }
-}
-
-async function clickNextElement(page, nextElement, inventoryType) {
-  try {
-    const isInsideAnchor = await isElementInsideAnchor(page, nextElement);
-
-    // If the element is in an anchor, then wait for page navigation.
-    if (isInsideAnchor) {
-      await handleAnchorElement(page, nextElement, inventoryType);
-    } else {
-      await handleNonAnchorElement(page, nextElement);
-    }  
-    console.log("clicked next element");
     return page;
   } catch (error) {
-    console.log("Error clicking next page", error)
-    return null;
+    console.log("Error clicking non-anchor", error);
   } finally {
     page?.off('request');
     page?.off('response');
   }
 }
 
+
+/**
+ * Clicks on the next element based on the provided page, nextElement, and inventoryType.
+ * If the element is inside an anchor, it waits for page navigation.
+ * If the element is not inside an anchor, it handles the element directly.
+ * @param {Page} page - The Puppeteer page object.
+ * @param {ElementHandle} nextElement - The next page navigation element to click.
+ * @param {string} inventoryType - The type of inventory (new, used, etc).
+ * @returns {Page|null} - The updated page object or null if there was an error.
+ */
+async function clickNextElement(page, nextElement, inventoryType) {
+  try {
+    let nextPage;
+    const isInsideAnchor = await isElementInsideAnchor(page, nextElement);
+
+    // If the element is in an anchor, then wait for page navigation.
+    if (isInsideAnchor) {
+      console.log("element is inside anchor");
+      nextPage = await handleAnchorElement(page, nextElement, inventoryType);
+      
+    } else {
+      console.log("element is not inside anchor");
+      nextPage = await handleNonAnchorElement(page, nextElement);
+    }  
+    if (!nextPage) return null;
+    console.log("clicked next element");
+    return nextPage;
+  } catch (error) {
+    console.log("Error clicking next page", error)
+    return null;
+  } 
+}
+
 // Find the next page navigation and return the navigated page
+/**
+ * Retrieves the next page of inventory based on the given page and inventory type.
+ * @param {Page} page - The Puppeteer page object.
+ * @param {string} inventoryType - The type of inventory (new, used, etc).
+ * @returns {Promise<Page|null>} - A promise that resolves to the next page of inventory, or null if no next page is found.
+ */
 async function getNextPage(page, inventoryType) {
   const xpaths = [
     `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]`,
@@ -443,6 +508,14 @@ async function getNextPage(page, inventoryType) {
   }
 }
 
+/**
+ * Retrieves all listings from a given page and its subsequent pages.
+ * 
+ * @param {Page} page - The Puppeteer page object.
+ * @param {string} inventoryType - The type of inventory to search for (new, used, etc).
+ * @param {Array} listingsData - The array to store the retrieved listings.
+ * @returns {Promise<Array>} - A promise that resolves to an array of listings data.
+ */
 async function allPageListings(page, inventoryType, listingsData = []) {
   const makes = ['agusta', 'aprilia', 'benelli', 'bmw', 'can-am', 'cf moto', 'ducati', 'greenger', 'guzzi', 'harley',  'hisun', 'honda', 'husqvarna', 'indian', 'karavan', 'kawasaki', 'ktm', 'kymco', 'mv agusta', 'polaris', 'royal enfield ', 'ssr', 'stacyc', 'suzuki', 'triumph', 'yamaha', 'beta', 'kayo', 'moke'];
   try {
@@ -501,10 +574,10 @@ export default async function getInfo(urls) {
     let allSitesListings = {};
     let inventoryUrl;
     for (const url of urls) {
-      const inventoryPages = await getInventoryPages(url, browser);
+      // const inventoryPages = await getInventoryPages(url, browser);
 
-      // const page = await goToNewTab("https://www.bertsmegamall.com/--inventory?condition=new&pg=1&sortby=inventory%7cdesc",browser);
-      // const inventoryPages = new Map([["new", page]]);
+      const page = await goToNewTab("https://www.nextride.com/default.asp?page=inventory&condition=new",browser);
+      const inventoryPages = new Map([["new", page]]);
       try {
         for (const  [inventoryType,page] of inventoryPages){
           inventoryUrl = page.url()

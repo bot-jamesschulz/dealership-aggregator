@@ -28,7 +28,7 @@
     ".next/types/**/*.ts",
     "**/*.ts",
     "**/*.tsx"
-  ],
+, "app/api/getBikeInfo/maps.js"  ],
   "exclude": [
     "node_modules"
   ]

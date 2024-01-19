@@ -10,5 +10,6 @@ export async function POST(request: Request) {
     const bikeInfo = await getBikeInfo(dealershipUrl);
 
     const searchValue = await request.json()
-    return NextResponse.json(bikeInfo);
+    //return NextResponse.json(bikeInfo);
+    return NextResponse.json("bam");
 }

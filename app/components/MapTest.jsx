@@ -4,7 +4,7 @@ import "leaflet/dist/leaflet.css";
 import * as turf from '@turf/turf'
 import californiaGeoJson from './california.json'
 import usGeoJSON from './us.json'
-const RADIUS = 50;
+const RADIUS = 25;
 const GEOJSON = californiaGeoJson;
 
 // 
