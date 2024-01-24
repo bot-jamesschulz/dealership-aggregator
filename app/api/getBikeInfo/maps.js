@@ -1,4 +1,10 @@
 import axios from 'axios';
+const fs = require('fs');
+import { searchPoints, allPlaceIds, placeIds } from './placesData.js';
+import placesDetails from './placesDetails.json';
+import filteredDetails from './filteredDetails.json';
+import allUrls from './allUrls.json';
+import filteredUrls from './filteredUrls.json';
 
 export default async function getDealerships() {
 
@@ -92,19 +98,14 @@ export default async function getDealerships() {
         'http://hbhonda.com/',
         'http://www.arcadiamotorcycleco.com/'
     ];
+
+    
     const nearbyEndpoint = 'https://places.googleapis.com/v1/places:searchText';
     const detailsEndpoint = 'https://places.googleapis.com/v1/places/';
     const nearbyQuery = 'motorcycle dealership';
     const nearbyFieldMask = 'places.id';
-    const detailsFieldMask = 'displayName,websiteUri,types,formattedAddress';
+    const detailsFieldMask = 'currentOpeningHours,currentSecondaryOpeningHours,internationalPhoneNumber,nationalPhoneNumber,priceLevel,rating,regularOpeningHours,regularSecondaryOpeningHours,userRatingCount,websiteUri,accessibilityOptions,addressComponents,adrFormatAddress,businessStatus,displayName,formattedAddress,googleMapsUri,iconBackgroundColor,iconMaskBaseUri,location,primaryType,primaryTypeDisplayName,plusCode,shortFormattedAddress,subDestinations,types,utcOffsetMinutes,viewport';
     
-    const nearbyConfig = {
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': PLACES_KEY,
-            'X-Goog-FieldMask': nearbyFieldMask,
-        }
-    };
     const detailsConfig = {
         headers: {
             'Content-Type': 'application/json',
@@ -113,61 +114,145 @@ export default async function getDealerships() {
         }
     };
 
-
-    const data = {
-        "textQuery": nearbyQuery,
-        "locationBias": {
-            "circle": {
-                "center": {
-                "latitude": 34,
-                "longitude": -118
-                },
-                "radius": 20000
-            }
+    const nearbyConfig = {
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': PLACES_KEY,
+            'X-Goog-FieldMask': nearbyFieldMask,
         }
     };
 
-    // try {
-    //     // const placesNearbyRes = await axios.post(nearbyEndpoint, data, nearbyConfig);
-
-    //     // // const placeIds = placesNearbyRes.data.places.map(place => place.id);
-    //     // // console.log(`Results: ${JSON.stringify(placeIds)}`)
-    //     // const placeIds = ["ChIJkROCaH_TwoARhgBA-FjxPSY","ChIJj_lcaH_TwoARuLpS3IGiHm0","ChIJFTBa4nrRwoARLSulR6U8sOM","ChIJl0L6aKTXwoARmya6ndx9S_c","ChIJ-1Gx8GzWwoARj-nGDZiE3oQ","ChIJdypODMHTwoARslMcJNDPuu4","ChIJ7Yqj1YrQwoAR7OI3ASTur0w","ChIJacx9DKLXwoARTga1YqEqOvc","ChIJ7-e_BRPXwoAR-_YtO0HE8fU","ChIJF4zSHfXWwoARVU-ox38Nc40","ChIJCeatQ0LTwoARlnkFB6DaZl0","ChIJKRXkCL4q3YAREkCS7uhhCXs","ChIJ3-nDfhDTwoARFIEOdUNhF70","ChIJP4hRUxnRwoARa2_lXerFvJg","ChIJmVo0AqbRwoARO7jQA4P-wuM","ChIJNU7OlWrV3IARQsXlAdhscxw","ChIJR6cKM-PIwoARw1x_vMUseQ8","ChIJrWrJRzHXwoARlAIvtvgVpVo","ChIJizuuc-fbwoARVx0JpHVA9g8"]
-
-        
-
-    //     // const placesDetails= await Promise.all(placeIds.map(async (placeId) => {
-    //     //     const res = await axios.get(`${detailsEndpoint}${placeId}`, detailsConfig);
-    //     //     return res.data;
-    //     // }));
+    
+    try {
+        // const filteredUrls = allUrls.filter(url => !url.includes('facebook'));
+        // const filteredUrlsJson = JSON.stringify(filteredUrls, null, 2);
+        // console.log(`filteredUrls: ${filteredUrlsJson}`);
+        // fs.writeFileSync('./app/api/getBikeInfo/filteredUrls.json', filteredUrlsJson, 'utf-8');
 
 
+        // const allUrls = [];
 
-    //     console.log(`placesDetails${JSON.stringify(placesDetails)}`);
+        // for (const details of filteredDetails) {
+        //     const url = details?.websiteUri;
+        //     if (url) {
+        //         allUrls.push(url);
+        //     }
+        // }
 
-    //     // const placeIds = placesNearbyRes.data.results.map(r => r.place_id);
-        
-    //     // websites = await Promise.all(Ids.map(async (Id) => {
-    //     //     let placeId = Id
-    //     //     const placeDetailsConfig = {
-    //     //         ...placesNearbyConfig,
-    //     //         url: `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=website&key=${mapsKey}`
-    //     //     }
+        // const allUrlsJson = JSON.stringify(allUrls, null, 2);
+        // console.log(`allUrls: ${allUrlsJson}`);
+        // fs.writeFileSync('./app/api/getBikeInfo/allUrls.json', allUrlsJson, 'utf-8');
+    
+        // console.log(`Places ids length: ${placeIds.length}`);
+        // console.log(`Places details length: ${placesDetails.length}`);
+        // const filteredDetails = [];
+
+        // for (const details of placesDetails) {
+        //     filteredDetails.push({
+        //         types: details?.types,
+        //         formattedAddress: details?.formattedAddress,
+        //         location: details?.location,
+        //         displayName: details?.displayName,
+        //         websiteUri: details?.websiteUri
+        //     });
+        // }
+        // const filteredDetailsJson = JSON.stringify(filteredDetails);
+        // console.log(`filteredDetails: ${filteredDetailsJson}`);
+        // fs.writeFileSync('./app/api/getBikeInfo/filteredDetails.json', filteredDetailsJson, 'utf-8');
+
+        // const allPlaceDetails= [];
+        // for (const id of placeIds) {
             
-    //     //     const placeDetailsRes = await axios(placeDetailsConfig);
-    //     //     const website = placeDetailsRes.data.result.website;
-    //     //     return website;
-    //     // }));
+        //     try {
+        //         const res = await axios.get(`${detailsEndpoint}${id}`, detailsConfig);
+        //         allPlaceDetails.push(res.data);
+                
+        //         console.log(`res for ${id}: ${JSON.stringify(res.data)}`);
+        //     } catch (err) {
+        //         console.error(`Error: ${err.message}`);
+        //         console.error(`Response data: ${JSON.stringify(err.response?.data)}`);
+        //         console.error(`Response status: ${err.response?.status}`);
+        //         console.error(`Response headers: ${JSON.stringify(err.response?.headers)}`);
+        //     }
+        // }
+        // console.log(`allPlaceDetails: ${allPlaceDetails}`);
+        // const detailsJson = JSON.stringify(allPlaceDetails, null, 2);
+        // console.log(`detailsJson: ${detailsJson}`);
+        // fs.writeFileSync('./app/api/getBikeInfo/placesDetails.json', detailsJson, 'utf-8');
+
+        // const allPlaceIds = [];
+        // let counter = 1;
+
+        // for (const point of searchPoints) {
+        //     const data = {
+        //         "textQuery": nearbyQuery,
+        //         "locationBias": {
+        //             "circle": {
+        //                 "center": {
+        //                 "latitude": point[0],
+        //                 "longitude":point[1]
+        //                 },
+        //                 "radius": 25000
+        //             }
+        //         }
+        //     };
+        //     try {
+        //         const placesNearbyRes = await axios.post(nearbyEndpoint, data, nearbyConfig);
+        //         const placeIds = placesNearbyRes.data.places.map(place => place.id);
+        //         allPlaceIds.push(placeIds);
+        //         console.log(`Results for point #${counter}: ${JSON.stringify(placeIds)}`)
+        //         console.log(`Results length: ${placeIds.length}`)
+        //         counter++;
+        //     } catch (err) {
+        //         console.error(`Error: ${err.message}`);
+        //         console.error(`Response data: ${JSON.stringify(err.response?.data)}`);
+        //         console.error(`Response status: ${err.response?.status}`);
+        //         console.error(`Response headers: ${JSON.stringify(err.response?.headers)}`);
+        //     }
+        // };
+        // console.log(`allPlaceIds: ${JSON.stringify(allPlaceIds)}`);
+        // console.log(`allPlaceIds length: ${allPlaceIds.length}`);
         
-    //     //console.log(websites);
-    // } catch(err) {
-    //     console.error(`Error: ${err.message}`);
-    //     console.error(`Response data: ${JSON.stringify(err.response?.data)}`);
-    //     console.error(`Response status: ${err.response?.status}`);
-    //     console.error(`Response headers: ${JSON.stringify(err.response?.headers)}`);
-    // };
+
+        
+        // const placeIds = ["ChIJkROCaH_TwoARhgBA-FjxPSY","ChIJj_lcaH_TwoARuLpS3IGiHm0","ChIJFTBa4nrRwoARLSulR6U8sOM","ChIJl0L6aKTXwoARmya6ndx9S_c","ChIJ-1Gx8GzWwoARj-nGDZiE3oQ","ChIJdypODMHTwoARslMcJNDPuu4","ChIJ7Yqj1YrQwoAR7OI3ASTur0w","ChIJacx9DKLXwoARTga1YqEqOvc","ChIJ7-e_BRPXwoAR-_YtO0HE8fU","ChIJF4zSHfXWwoARVU-ox38Nc40","ChIJCeatQ0LTwoARlnkFB6DaZl0","ChIJKRXkCL4q3YAREkCS7uhhCXs","ChIJ3-nDfhDTwoARFIEOdUNhF70","ChIJP4hRUxnRwoARa2_lXerFvJg","ChIJmVo0AqbRwoARO7jQA4P-wuM","ChIJNU7OlWrV3IARQsXlAdhscxw","ChIJR6cKM-PIwoARw1x_vMUseQ8","ChIJrWrJRzHXwoARlAIvtvgVpVo","ChIJizuuc-fbwoARVx0JpHVA9g8"]
+
+        
+
+        // const placesDetails= await Promise.all(placeIds.map(async (placeId) => {
+        //     const res = await axios.get(`${detailsEndpoint}${placeId}`, detailsConfig);
+        //     return res.data;
+        // }));
+
+
+
+        //console.log(`placesDetails${JSON.stringify(placesDetails)}`);
+
+        // const placeIds = placesNearbyRes.data.results.map(r => r.place_id);
+        
+        // websites = await Promise.all(Ids.map(async (Id) => {
+        //     let placeId = Id
+        //     const placeDetailsConfig = {
+        //         ...placesNearbyConfig,
+        //         url: `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=website&key=${mapsKey}`
+        //     }
+            
+        //     const placeDetailsRes = await axios(placeDetailsConfig);
+        //     const website = placeDetailsRes.data.result.website;
+        //     return website;
+        // }));
+        
+        //console.log(websites);
+    } catch(err) {
+        console.error(`Error outer: ${err.message}`);
+        console.error(`Response data: ${JSON.stringify(err.response?.data)}`);
+        console.error(`Response status: ${err.response?.status}`);
+        console.error(`Response headers: ${JSON.stringify(err.response?.headers)}`);
+    };
     //return [websites[0],websites[1],websites[3],websites[4],websites[5],websites[6],websites[7],websites[8],websites[9]];
-    //return [websites[4]];
+    //return testingWebsites.slice(11,12);
     //return websites.slice(0,20)
-    return [websites25KM[7]];
+    //return websites25KM;
+    //return ["http://www.sierrasteelhd.com/"];
+    return filteredUrls.slice(19,20);
 };

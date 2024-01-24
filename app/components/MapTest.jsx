@@ -84,8 +84,12 @@ const MapTest = () => {
     };
     console.log(`intersectingHexagons: ${JSON.stringify(intersectingHexagons)}`);
     console.log(`Hexagon count: ${intersectingHexagons.length}`)
+    
 
     intersectingHexagonsCentersRef.current = intersectingHexagons.map(feature => turf.center(feature)); 
+    const searchPoints = intersectingHexagonsCentersRef.current.map(feature => [feature.geometry.coordinates[1], feature.geometry.coordinates[0]]);
+    console.log(`hexagon centers: ${JSON.stringify(intersectingHexagonsCentersRef.current)}`);
+    console.log(`searchPoints: ${JSON.stringify(searchPoints)} searchPointLength: ${searchPoints.length}`);
 
     
     
