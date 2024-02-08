@@ -1,4 +1,6 @@
-const puppeteer = require('puppeteer-extra');
+import puppeteer from 'puppeteer-extra';
+import fs from 'fs/promises';
+import { list } from 'postcss';
 
 // add stealth plugin and use defaults (all evasion techniques)
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
@@ -135,8 +137,8 @@ function getNewUrl(href,page) {
   try {
     const newUrl = new URL(href,  page.url())
     return newUrl.href;
-  } catch (error) {
-    console.log("Error creating new url:", error)
+  } catch (err) {
+    console.log("Error creating new url:", err)
     return null
   }
 }
@@ -144,33 +146,75 @@ function getNewUrl(href,page) {
 /**
  * Retrieves sorted anchor hrefs based on search criteria.
  * @param {Page} page - The Puppeteer page object.
- * @param {string[]} searchTexts - An array of keywords to search for.
+ * @param {string[]} keywords - An array of keywords to search for.
  * @param {string} anchorContentSearch - The keyword to search for in the text content of the anchors.
  * @returns {Object} - An object containing the sorted hrefs.
  */
-async function sortedAnchorHrefs(page,searchTexts,anchorContentSearch) {
+async function sortedPageSearch(page, keywords, anchorContentSearch, innerTextSearch) {
   let sortedHrefs = {};
+  console.log(`innerTextSearch: ${innerTextSearch}`)
   try {
     // Search for keywords in the text content of the anchors
-    if (anchorContentSearch && searchTexts.length > 0) {
-      const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${anchorContentSearch}")]`; 
-      const elementHandles = await page.$x(xpath);
-      
-      if (elementHandles.length > 0) {
-        // Pull the hrefs from the anchors
-        const hrefs = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => element.getAttribute('href'), elem)));
+    if (keywords.length > 0 && !innerTextSearch) {
+      for (const keyword of keywords) {
+        const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${keyword}")]`; 
+        const elementHandles = await page.$x(xpath);
         
-        // Keywords to search for in the hrefs. Find the one for each and add them to matchHref if they exist
-        for (const keyword of searchTexts) {
-          const matchingHref = hrefs.find(href => href.toLowerCase().includes(keyword));
+        if (elementHandles.length > 0) {
+          // // Pull the hrefs from the anchors
+          
+          const hrefs = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => element.getAttribute('href'), elem)));
+  
+          let matchingHref;    
+          if (keyword === 'new') {
+            matchingHref = hrefs?.find(href => 
+              href?.toLowerCase().includes(keyword) 
+              && !href?.toLowerCase().includes('news')
+            );
+          } else if (keyword === 'all') {
+            matchingHref = hrefs?.find(href => 
+              href?.toLowerCase().includes(keyword) 
+              && !href?.toLowerCase().includes('gallery')
+            );
+          } else {
+            matchingHref = hrefs?.find(href => href?.toLowerCase().includes(keyword));
+          }
           if (matchingHref) {
             sortedHrefs[keyword] = getNewUrl(matchingHref,page);
           }
         }
       }
-      return sortedHrefs;
+
+    } else if (innerTextSearch) {
+      
+      // Keywords to search for in the innerText, if found, then add the href.
+      for (const keyword of keywords) {
+        const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${keyword}")]`; 
+        const elementHandles = await page.$x(xpath);
+        const elementInfo = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => ({ href: element.getAttribute('href'), innerText: element.innerText }), elem)));
+        console.log("searching in innertTexts")
+        
+        let matchingHref;
+
+        if (keyword === 'new') {
+          matchingHref = elementInfo?.find(elem => 
+            elem?.innerText?.toLowerCase().includes(keyword) 
+            && !elem?.innerText?.toLowerCase().includes('news')
+          )?.href;
+        } else if (keyword === 'all') {
+          matchingHref = elementInfo?.find(elem => 
+            elem?.innerText?.toLowerCase().includes(keyword) 
+            && !elem?.innerText?.toLowerCase().includes('gallery')
+          )?.href;
+        } else { 
+          matchingHref = elementInfo?.find(elem => elem?.innerText?.toLowerCase().includes(keyword))?.href;
+        }
+        if (matchingHref) {
+          sortedHrefs[keyword] = getNewUrl(matchingHref,page);
+        }
+      } 
     // Search for keywords in the hrefs
-    } else if (anchorContentSearch && searchTexts.length === 0) {
+    } else if (anchorContentSearch && keywords.length === 0) {
       const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${anchorContentSearch}")]`; 
       const elementHandles = await page.$x(xpath);
       
@@ -181,32 +225,48 @@ async function sortedAnchorHrefs(page,searchTexts,anchorContentSearch) {
           sortedHrefs[anchorContentSearch] = getNewUrl(href,page);
         }
       }
-      return sortedHrefs;
 
-    } else {
-      for (const searchText of searchTexts) {
-        const xpath = `//a[contains(translate(@href, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${searchText}") and not(contains(@href, '#'))]`; 
-        const elementHandles = await page.$x(xpath);
-        
-        if (elementHandles.length > 0) {
-          const href = await page.evaluate(element => element.getAttribute('href'), elementHandles[0]);
-          sortedHrefs[searchText] = getNewUrl(href,page);
-          
-        }
-      }
-    
+    }
+  }  catch (err) {
+    console.log("Error getting sorted anchor hrefs:", err);
+  } finally {
     return sortedHrefs;
   }
-} catch (err) {
-      console.log("Error getting sorted anchor hrefs:", err);
-}
-  
 }
 
 async function goToNewTab(url, browser) {
-  const page = await browser.newPage();
-  await page.goto(url,{ waitUntil: 'networkidle2' });
-  return page;
+  let page;
+  try {
+    page = await browser.newPage();
+    await page.goto(url,{ waitUntil: 'load' });
+    return page;
+  } catch(err) {
+    console.log("Error going to new tab:", err);
+    await page.close();
+    return null;
+  }
+}
+
+
+/**
+ * Checks if the given inventory page set is valid.
+ * @param {Object} hrefs - The inventory page set to be checked.
+ * @returns {boolean} - Returns true if the inventory page set is valid, otherwise false.
+ */
+function isValidInventoryPageSet(hrefs) {
+  if (JSON.stringify(hrefs) === '{}' || !hrefs) {
+    return false;
+  }
+
+  if (hrefs['new'] && (hrefs['used'] || hrefs['owned'])) {
+    return true;
+  }
+
+  if (hrefs['inventory'] || hrefs['all']) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -215,18 +275,21 @@ async function goToNewTab(url, browser) {
  * @param {string} url - The URL to navigate to.
  * @param {object} browser - The browser instance.
  * @returns {Map} - A Map containing the inventory pages.
- * @throws {Error} - If there is an error getting the inventory pages.
+ * @throws {err} - If there is an error getting the inventory pages.
  */
 async function getInventoryPages (url, browser, makes) {
   let page, hrefs, forSaleUrl, forSaleHref;
   let inventoryPages = new Map();
   try {
     page = await goToNewTab(url,browser);
+    if (!page) {
+      return null;
+    }
     const inventoryKeywords = ["new","used","all","owned","inventory"];
     const homeKeywords = ["home"];
 
     // First make sure we are on the home page
-    hrefs = await sortedAnchorHrefs(page,homeKeywords);
+    hrefs = await sortedPageSearch(page,homeKeywords);
     if (hrefs["home"]) {
       console.log("Going to home page")
       const homeUrl = getNewUrl(hrefs["home"],page);
@@ -234,31 +297,41 @@ async function getInventoryPages (url, browser, makes) {
     }
     
     // Search for links to inventory pages
-    hrefs = await sortedAnchorHrefs(page,inventoryKeywords,"inventory");
+    hrefs = await sortedPageSearch(page,inventoryKeywords);
     console.log("hrefs:", hrefs);
-    const noInventoryHrefs = JSON.stringify(hrefs) === '{}' || !hrefs;
-
+    let validInventoryPageSet = isValidInventoryPageSet(hrefs);
 
     // If there are no inventory pages, look for a for sale page.
-    if (noInventoryHrefs) {
+    if (!validInventoryPageSet) {
       console.log("No inventory pages found");
-      forSaleHref = await sortedAnchorHrefs(page,[],"for sale");
+      forSaleHref = await sortedPageSearch(page,[],"for sale");
       // Go to for sale page and check for inventory pages
-      if (forSaleHref["for sale"]) {
+      if (forSaleHref && forSaleHref["for sale"]) {
         console.log("Going to for sale page");
         forSaleUrl = getNewUrl(forSaleHref["for sale"],page);
         await page.goto(forSaleUrl,{ waitUntil: 'networkidle2' });
         // Search for links to inventory pages
-        hrefs = await sortedAnchorHrefs(page,inventoryKeywords,"inventory");
+        hrefs = await sortedPageSearch(page,inventoryKeywords);
+        validInventoryPageSet = isValidInventoryPageSet(hrefs);
         console.log("hrefs:", hrefs);
+      }
+      
+
+      // If there are still no inventory pages, look for the keywords in innerTexts rather than the hrefs.
+      if (!validInventoryPageSet) {
+        console.log("About to look for keywords in innerTexts");
+        hrefs = await sortedPageSearch(page,inventoryKeywords,'',true);
+        validInventoryPageSet = isValidInventoryPageSet(hrefs);
       }
     }
 
+    
+
     // If there are no inventory pages, look for (a) make page(s).
-    if (noInventoryHrefs && !forSaleHref["for sale"]) {
+    if (!validInventoryPageSet && !(forSaleHref || forSaleHref["for sale"])) {
       for (const make of makes) {
         console.log(`Searching for ${make} inventory page`);
-        const makeHref = await sortedAnchorHrefs(page,[],make);
+        const makeHref = await sortedPageSearch(page,[],make);
         if (makeHref[make]) {
           
           const makeUrl = getNewUrl(makeHref[make],page);
@@ -269,30 +342,32 @@ async function getInventoryPages (url, browser, makes) {
       return inventoryPages;
     }
 
-    
-
-    // Decide which inventory pages to create depending on which inventory page types were found
-    if (hrefs["new"]) {
-      inventoryPages.set("new", await goToNewTab(hrefs["new"],browser));  
-      if (hrefs["owned"]) { 
-        inventoryPages.set("owned", await goToNewTab(hrefs["owned"],browser));
-      } else if (hrefs["used"]) {
-        inventoryPages.set("used", await goToNewTab(hrefs["used"],browser));
-      }
+    // Inventory pages to return depending on what was found
+    if (hrefs['new'] && hrefs['owned']) {
+      inventoryPages.set("new", await goToNewTab(hrefs["new"],browser));
+      inventoryPages.set("owned", await goToNewTab(hrefs["owned"],browser));
+    } else if (hrefs['new'] && hrefs['used']) {
+      inventoryPages.set("new", await goToNewTab(hrefs["new"],browser));
+      inventoryPages.set("used", await goToNewTab(hrefs["used"],browser));
     } else if (hrefs["inventory"]){
       inventoryPages.set("inventory", await goToNewTab(hrefs["inventory"],browser));
     } else if (hrefs["all"]) {
       inventoryPages.set("all", await goToNewTab(hrefs["all"],browser));
-    } else if(forSaleUrl["for sale"]) {
-      inventoryPages.set("inventory", await goToNewTab(forSaleUrl["for sale"],browser));
+    } else if (forSaleHref && forSaleHref["for sale"]) {
+      inventoryPages.set("inventory", await goToNewTab(forSaleHref["for sale"],browser));
     } else {
-      console.log("No anchors found");
+      console.log("No suitable invetory groups found, returning any pages that were found.")
+      for (const category in hrefs) {
+        if (hrefs.hasOwnProperty(category)) {
+          inventoryPages.set(category, await goToNewTab(hrefs[category],browser));
+        }
+      }
     }
 
   console.log("Inventory pages retrieved");
   return inventoryPages;
-  } catch (error) {
-    console.error('Error getting inventory pages:', error);
+  } catch (err) {
+    console.error('Error getting inventory pages:', err);
     return null;
   } finally {
     await page?.close();
@@ -320,9 +395,9 @@ function isValidNextHref(page, url, href, inventoryType) {
 
     console.log(`currentDomain: ${currentDomain} | nextPageDomain: ${nextPageDomain} | inventoryType: ${inventoryType} | includesInventoryType: ${includesInventoryType}`)
     
-    return currentDomain == nextPageDomain && includesInventoryType;
-  } catch (error) {
-    console.log("Error validating href:", error)
+    return currentDomain == nextPageDomain;
+  } catch (err) {
+    console.log("Error validating href:", err)
   }
 }
 
@@ -443,7 +518,7 @@ async function handleElement(page, nextElement,inventoryType, makes) {
               break;
             }
           }
-        } catch(error) {
+        } catch(err) {
           console.log("Error accessing document ready state:");
         }
       }
@@ -458,8 +533,8 @@ async function handleElement(page, nextElement,inventoryType, makes) {
     // console.log("Response count after polling:", responseCount);
     // console.log(`Isnavigating after polling: ${isNavigating}`)
     return page;
-  } catch (error) {
-    console.log("Error clicking next element", error);
+  } catch (err) {
+    console.log("Error clicking next element", err);
   } finally {
     page?.off('request');
     page?.off('response');
@@ -475,10 +550,11 @@ async function handleElement(page, nextElement,inventoryType, makes) {
  */
 async function getNextPage(page, inventoryType, makes) {
   const xpaths = [
-    `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]`,
     `//*[@aria-label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]]`,
-    `//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]`,
     `//*[@title[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]]`,
+    `//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]`,
+    `//*[@class[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]]`,
+    `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]`,
     `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), ">")]`
   ];
   try {
@@ -486,6 +562,8 @@ async function getNextPage(page, inventoryType, makes) {
     
     for (const xpath of xpaths) {
       const elementHandles = await page.$x(xpath);
+      // Reverse the order so that we look from the bottom of the page up. This is to avoid false positives: for example, if there is a next element in an image carousel.
+      elementHandles.reverse();
       // Attempt to click each element
       for (const handle of elementHandles) {
         const nextPage = await handleElement(page, handle, inventoryType, makes);
@@ -499,10 +577,17 @@ async function getNextPage(page, inventoryType, makes) {
 
     return null;
     
-  } catch (error) {
-    console.error('Error getting next page:', error);
+  } catch (err) {
+    console.error('Error getting next page:', err);
     return null;
   }
+}
+
+function isNewListings(listingsData, newListings) {
+  const urlSet = new Set(listingsData.map(listing => listing?.url));
+  const newListingsUrls = newListings.map(listing => listing?.url);
+  return newListingsUrls.some(url => !urlSet.has(url));
+
 }
 
 /**
@@ -521,21 +606,13 @@ async function allPageListings(page, inventoryType, makes, listingsData = []) {
     console.log("getting listings on:", url);
     const listings = await pageListings(page, makes);
 
-    // Add the listings to the aggregate map
+    // Add the listings to the accumulator array
     if (listings) {
-      // const listingsCount = Object.values(listings).reduce((acc, arr) => acc + arr.length, 0);
-      const listingsCount = listings.length;
-      listingsData.push({
-        pageCount: listingsData.length + 1,
-        url,
-        listingsCount
-      })
+      listingsData.push(...listings)
     }
 
     console.log(`Listings for page ${listingsData.length + 1}: ${url}`);
     logNestedObject(listings);
-    
-    const currentPageContent = await page.$eval('body', (body) => body.textContent);
     
     // Retrieve the next page
     const nextPage = await getNextPage(page, inventoryType, makes);
@@ -546,55 +623,68 @@ async function allPageListings(page, inventoryType, makes, listingsData = []) {
     }
 
     console.log("Next page loaded")
-    const nextPageContent =await page.$eval('body', (body) => body.textContent);
-    // Compare the current page content to the next page content
+    const nextPageListings = await pageListings(nextPage, makes);
+    let listingsDiff = isNewListings(listingsData, nextPageListings);
+    // Compare the current page listings to the next page listings
     // Keep searching if they are different
-    if (currentPageContent != nextPageContent) {
+    if (listingsDiff) {
       await allPageListings(nextPage, inventoryType, makes, listingsData);
     }
 
     console.log("End of inventory"); 
-  } catch (error) {
-    console.error('Error getting listings:', error);
+  } catch (err) {
+    console.error('Error getting listings:', err);
   } finally {
     return listingsData;
   }
 }
 
 export default async function getInfo(urls) {
+  const beginDate = new Date();
+  const BeginDateTime = `${beginDate.getMonth()+1}-${beginDate.getDate()}_${beginDate.getHours()}-${beginDate.getMinutes()}-${beginDate.getSeconds()}`;
   let browser;
   const makes = ['agusta', 'aprilia', 'benelli', 'bmw', 'can-am', 'cf moto', 'ducati', 'greenger', 'guzzi', 'harley',  'hisun', 'honda', 'husqvarna', 'indian', 'karavan', 'kawasaki', 'ktm', 'kymco', 'mv agusta', 'polaris', 'royal enfield ', 'ssr', 'stacyc', 'suzuki', 'triumph', 'yamaha', 'beta', 'kayo', 'moke'];
   try {
     browser = await puppeteer.launch({headless: false});
     // Get the hrefs that link to inventory pages
-    let allSitesListings = {};
+    
     let inventoryUrl;
     for (const url of urls) {
+      console.log(`Getting listings for ${url}`);
+      const dealershipListings = {dealershipUrl: url};
       try {
         const inventoryPages = await getInventoryPages(url, browser, makes);
 
-        // const page = await goToNewTab("https://www.fators.com/ktm-1",browser);
-        // const inventoryPages = new Map([["ktm", page]]);
+        // const page = await goToNewTab("https://www.indianmotorcycleorangecounty.com/new-motorcycles-for-sale--inventory?condition=new&pg=1&sortby=Price|desc",browser);
+        // const inventoryPages = new Map([["new", page]]);
+        const inventoryTypeListings = [];
         for (const  [inventoryType,page] of inventoryPages){
           inventoryUrl = page.url()
           console.log(`Getting '${inventoryType}' listings for ${inventoryUrl}`)
           await page.bringToFront();
-          const listings = await allPageListings(page, inventoryType, makes);
+          const tempListings = await allPageListings(page, inventoryType, makes);
           
-          allSitesListings[inventoryUrl] = listings;
+          inventoryTypeListings.push(...tempListings);
+          dealershipListings[inventoryType] = inventoryTypeListings;
           await page.close();
         }
-      } catch(error) {
+        
+      } catch(err) {
         console.log(`Error getting listings for ${inventoryUrl}`)
       }
-
-      console.log(`All listings for ${url}: ${JSON.stringify(allSitesListings, null, 2)}`)
-    }
+      // try {
+      //   const dealershipListingsJson = JSON.stringify(dealershipListings, null, 2);
+      //   fs.appendFile(`./app/api/getBikeInfo/results/listingResults${BeginDateTime}.json`, `${dealershipListingsJson},\n`, 'utf-8');
+      //   console.log(`All listings for ${url}: ${dealershipListingsJson}`)
+      // } catch (err) {
+      //   console.log("Error writing listings to file:", err);
+      // }
+    } 
 
     return "All the info";
 
-  } catch (error) {
-  console.error('Error:', error);
+  } catch (err) {
+  console.error('Error:', err);
   } finally {
     await browser.close();
   }

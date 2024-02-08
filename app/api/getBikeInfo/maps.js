@@ -3,8 +3,8 @@ const fs = require('fs');
 import { searchPoints, allPlaceIds, placeIds } from './placesData.js';
 import placesDetails from './placesDetails.json';
 import filteredDetails from './filteredDetails.json';
-import allUrls from './allUrls.json';
-import filteredUrls from './filteredUrls.json';
+import allUrls from './urls/allUrls.json';
+import cleanedUrls from './urls/cleanedUrls.json';
 
 export default async function getDealerships() {
 
@@ -145,10 +145,12 @@ export default async function getDealerships() {
     
         // console.log(`Places ids length: ${placeIds.length}`);
         // console.log(`Places details length: ${placesDetails.length}`);
+
         // const filteredDetails = [];
 
         // for (const details of placesDetails) {
         //     filteredDetails.push({
+        //         primaryType: details?.primaryType,
         //         types: details?.types,
         //         formattedAddress: details?.formattedAddress,
         //         location: details?.location,
@@ -250,9 +252,10 @@ export default async function getDealerships() {
         console.error(`Response headers: ${JSON.stringify(err.response?.headers)}`);
     };
     //return [websites[0],websites[1],websites[3],websites[4],websites[5],websites[6],websites[7],websites[8],websites[9]];
-    //return testingWebsites.slice(11,12);
+    //return testingWebsites.slice(6,7);
     //return websites.slice(0,20)
     //return websites25KM;
-    //return ["http://www.sierrasteelhd.com/"];
-    return filteredUrls.slice(19,20);
+    return ["http://www.onyxmoto.com/"];
+    //return filteredUrls.slice(0,600);
+    //return cleanedUrls.slice(0,703);
 };
