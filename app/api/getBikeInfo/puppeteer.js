@@ -1,119 +1,330 @@
 import puppeteer from 'puppeteer-extra';
 import fs from 'fs/promises';
-import { list } from 'postcss';
 
 // add stealth plugin and use defaults (all evasion techniques)
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
 
+export default async function getInfo(urls) {
+  const beginDate = new Date();
+  const BeginDateTime = `${beginDate.getMonth()+1}-${beginDate.getDate()}_${beginDate.getHours()}-${beginDate.getMinutes()}-${beginDate.getSeconds()}`;
+  const makes = ['agusta', 'aprilia', 'benelli', 'bmw', 'can-am', 'cf moto', 'ducati', 'greenger', 'guzzi', 'harley',  'hisun', 'honda', 'husqvarna', 'indian', 'karavan', 'kawasaki', 'ktm', 'kymco', 'mv agusta', 'polaris', 'royal enfield ', 'ssr', 'stacyc', 'suzuki', 'triumph', 'yamaha', 'beta', 'kayo', 'moke'];
+  const MIN_VALID_LISTINGS = 25;
+  let browser;
+  
+  try {
+    browser = await puppeteer.launch({headless: false}); 
+    
+    let inventoryUrl;
+    // Extract listing info from each website
+    for (const url of urls) {
+      console.log(`Getting listings for ${url}`);
+      const dealershipListings = {dealershipUrl: url};
+      try {
+        const inventoryPages = await getInventoryPages(url, browser, makes); 
+
+        // const page = await goToNewTab("https://www.motounitedwhittier.com/default.asp?page=xNewInventory",browser);
+        // const inventoryPages = new Map([["new", page]]);
+        console.log('inventory pages', inventoryPages.keys())
+        // Extract listing from each type of inventory page (e.g. 'new', 'used')
+        for (const  [ inventoryType, page ] of inventoryPages){
+      
+          let listingsByType;
+          try {
+
+            // If we have listings in new and used then close out the remaining pages
+            if (dealershipListings['new']?.length > MIN_VALID_LISTINGS && (dealershipListings['used']?.length > MIN_VALID_LISTINGS || dealershipListings['owned']?.length > MIN_VALID_LISTINGS)) {
+              console.log('found listings in all required categories... exiting')
+              await page?.close();
+              continue;
+            }
+
+            inventoryUrl = page.url()
+            console.log(`Getting '${inventoryType}' listings for ${inventoryUrl}`)
+            await page.bringToFront();
+            // Iterate through all pages of the inventory type (e.g. pages 1-10 of 'new')
+            listingsByType = await allPageListings(page, inventoryType);
+            
+            if (listingsByType.length > 0) {
+              dealershipListings[inventoryType] = listingsByType;
+            }
+
+            
+          
+          } catch(err) {
+            console.log(`error getting ${inventoryType} listings`, err)
+          } finally {
+            try {
+              await page?.close();
+            } catch (err) {
+                console.log(`Error closing page for ${inventoryType}:`, err);
+            }
+          }
+        }
+      } catch(err) {
+        console.log(`Error getting listings for ${inventoryUrl}`)
+      }
+      try {
+        const dealershipListingsJson = JSON.stringify(dealershipListings, null, 2);
+        fs.appendFile(`./app/api/getBikeInfo/results/listingResults${BeginDateTime}.json`, `${dealershipListingsJson},\n`, 'utf-8');
+      } catch (err) {
+        console.log("Error writing listings to file:", err);
+      }
+    } 
+
+    return "All the info";
+
+  } catch (err) {
+  console.error('Error:', err);
+  } finally {
+    await browser.close();
+  }
+}
+
+/**
+ * Waits for the network to become idle
+ * 
+ * @param {Page} page - The Puppeteer page object.
+ * @param {Object}  - An object containing options
+ */
+async function waitForNetworkIdle(page, { minConnections = 0, idleTime = 1000, timeout = 5000 } = {}) {
+  let requestCount = 0;
+  let lastRequestCount = 0;
+
+  try {
+
+    page.on('request', () => {
+      requestCount++;
+    });
+    page.on('requestfinished', () => {
+      requestCount--;
+      // console.log("response #", responseCount);
+    });
+    page.on('requestfailed', () => {
+      requestCount--;
+    });
+
+    return new Promise((resolve,reject) => {
+
+      setTimeout(() => {
+        reject(new Error('waitForNetworkIdle timed out'));
+      },timeout);
+
+      const interval = setInterval(() => {
+        console.log('network status:', requestCount, lastRequestCount);
+        if (requestCount === lastRequestCount && requestCount <= minConnections) {
+          clearInterval(interval);
+          resolve();
+        } else {
+          
+          lastRequestCount = requestCount;
+        }
+      }, idleTime);
+    });
+  } catch {
+    console.log('error while waiting for network idle')
+  } finally {
+    page?.off('request');
+    page?.off('requestfinished');
+    page?.off('requestfailed');
+  }
+}
+
+
 /**
  * Retrieves the listings of vehicles from a web page.
  * 
  * @param {Page} page - The Puppeteer page object.
- * @param {string[]} vehicleMakes - An array of vehicle makes to search for.
+ * @param {Object}  - An options object specifying if images should be retrieved.
  * @returns {Object} - An object containing the vehicle information.
  */
-async function pageListings(page, vehicleMakes) {
-  let vehicleInfo = {};
+async function pageListings(page, { getImgs = false } = {}) {
+  const TIMEOUT = 10000;
+  const LOWER_YEAR_BOUND = 1950;
+  const UPPER_YEAR_BOUND = new Date().getFullYear() + 2;
   const listings = [];
-  const listingUrls = [];
+  const listingUrls = new Set();
+  let listingData, listingImgs;
 
+  console.log('getting listings')
 
-  // Get all anchor elements
-  const anchorHandles = await page.$$('a');
-
-  // Get the content/attributes from the anchors
-  const anchorData = await Promise.all(anchorHandles.map(async (anchorHandle) => {
-    const innerText = await anchorHandle.evaluate(node => node.innerText);
-    const href = await anchorHandle.evaluate(node => node.getAttribute("href"));
-    
-    return { innerText, href };
-  }));
- 
-  console.log("Searching for listings on:", page.url())
-
-  // Alternative
-  const yearPattern = /(\d{4})/g;
-  for (const { innerText, href } of anchorData ) {
-    const trimmedText = innerText.trim().replace(/\r?\n|\r/,' ');
-    // Look for substrings of 4 digits
-    const matches = trimmedText.match(yearPattern);
-    const lowerBound = 1950;
-    const upperBound = new Date().getFullYear() + 2;
-    
-    // Check if any of the digit substrings are in the correct range
-    const validMatch = matches?.find(match => {
-        const year = parseInt(match);
-        return year >= lowerBound && year <= upperBound;
-      });
-    if (validMatch) {
-      const validUrl = getNewUrl(href, page);
-      if (!listingUrls.includes(validUrl)) {
-
-        listingUrls.push(validUrl);
-        listings.push({listing: innerText, url: validUrl})
-      }
-    }
-  }; 
-
-
-  // Look through anchorData for innerText that includes the make
-  // for (const make of vehicleMakes) {
-    
-  //   // Look through anchors that include the make and check if they are valid listings
-  //   anchorData.forEach(({ innerText, href }) => {
-  //     const trimmedText = innerText.trim().replace(/\r?\n|\r/,' ');
-      
-  //     // Split the string into an array of words
-  //     // const words = trimmedText.split(/\s+/);
-
-  //     if (!innerText || !trimmedText.toLowerCase().includes(make)) {
-  //       return;
-  //     };
-
-  //     // First word should either be a 4 digit number or a keyword
-  //     const yearPattern = /(\d{4})/g;
-  //     const validFirstWords = ['owned', 'new', 'used'];
-  //     const words = trimmedText.split(/\s+/);
-  //     const firstWord = words[0];
-
-  //     const isValidFirstWord = validFirstWords.some(validWord => firstWord.toLowerCase().includes(validWord)) ||  yearPattern.test(firstWord);
-
-  //     if (!isValidFirstWord) {
-  //       return;
-  //     }
-
-  //     // Look for substrings of 4 digits
-  //     const matches = trimmedText.match(yearPattern);
-  //     const lowerBound = 1950;
-  //     const upperBound = new Date().getFullYear() + 2;
-      
-  //     // Check if any of the digit substrings are in the correct range
-  //     const validMatches = matches?.find(match => {
-  //         const year = parseInt(match);
-  //         return year >= lowerBound && year <= upperBound;
-  //       });
-
-  //     // If we have a valid title then add it to vehicleInfo
-  //     if (validMatches) {
-  //       const validUrl = getNewUrl(href, page);
-
-  //       if (!listingUrls.includes(validUrl)) {
-
-  //         listingUrls.push(validUrl);
-
-  //         if (vehicleInfo[make]) {   
-  //             vehicleInfo[make].push({"title": trimmedText, "url": validUrl});
-  //         } else {
-  //           vehicleInfo[make] = [{"title": trimmedText, "url": validUrl}];
-  //         }
-  //       }
-  //     } 
-  //   });
-  // }
+  const timeout = new Promise((resolve) => {
+    setTimeout(() => {
+      resolve();
+    }, TIMEOUT); 
+  });
   
+  await Promise.race([
+    timeout, 
+    getListings()
+  ]);
+
   return listings;
+
+  async function getListings() {
+  
+    try {
+
+      if (getImgs) {
+        const pageHeight = await page.evaluate(() => document.body.scrollHeight);
+        // Set the viewport size to cover the entire page height
+        await page.setViewport({ width: 1920, height: pageHeight});
+    
+        await page.evaluate(async () => {
+          await new Promise((resolve) => {
+              let totalHeight = 0;
+              const distance = 400;
+              const timer = setInterval(() => {
+                  var scrollHeight = document.body.scrollHeight;
+                  window.scrollBy(0, distance);
+                  totalHeight += distance;
+
+                  if(totalHeight >= scrollHeight - window.innerHeight){
+                      clearInterval(timer);
+                      resolve();
+                  }
+              }, 100);
+          });
+        });
+
+        // Make sure lazy loaded images get loaded
+        try { 
+          await waitForNetworkIdle(page, { minConnections: 2 });
+        } catch(err) {
+          console.log('timeout exceeded while waiting for lazy loaded images')
+        }
+      }
+
+      // Extract the images/listings from the page, keyed by their position in the DOM
+      [ listingData, listingImgs ] = await page.evaluate((getImgs) => {
+        const MINIMUM_IMG_DIST = 10;
+        const listingImgs = {};
+        let prevImgIndex = null;
+        const listingData = [];
+        const elementNodes = document.querySelectorAll('*');
+        const elements = Array.from(elementNodes);
+
+        for (const [index, element] of elements.entries()) {
+          let innerText = null;
+          let href = null;
+          const backgroundImg = window.getComputedStyle(element).backgroundImage === 'none' 
+            ? null
+            : window.getComputedStyle(element).backgroundImage;
+
+          if (element.tagName === "A") {
+            innerText = element.innerText;
+            href = element.getAttribute("href");
+          }
+
+          let closestImgDist = Math.abs(prevImgIndex-index);
+          if (getImgs) {
+            // Make sure that the image isn't part of a subsection/gallery of images
+            if (element.tagName === "IMG" && closestImgDist > MINIMUM_IMG_DIST) {
+              const waitInterval = 100; // Time to wait before checking the src attribute again
+              const maxWaitTime = 5000; // Maximum wait time for checking src
+              let elapsedTime = 0;
+              
+              // Wait for src attribute to be set
+              const waitForSrc = () => {
+                if (element.getAttribute('src') !== null) {
+                  const url = new URL(element.getAttribute('src'), window.location.href )
+                  listingImgs[index] = url.href; // Save the img's url with an associated element index, for use later to find closest listing element
+                  prevImgIndex = index;
+                  return;
+                }
+
+                elapsedTime += waitInterval;
+                if (elapsedTime < maxWaitTime) {
+                  setTimeout(waitForSrc, waitInterval);
+                }
+              };
+
+              waitForSrc();
+            }
+
+            // Make sure that the background-image isn't part of a subsection/gallery of images
+            if (backgroundImg && closestImgDist > MINIMUM_IMG_DIST) {
+
+              const backgroundImgUrlMatch = backgroundImg.match(/url\("(.+)"\)/); // Extract the url
+              const backgroundImgUrl = backgroundImgUrlMatch ? backgroundImgUrlMatch[1] : null;
+              if (!backgroundImgUrl || backgroundImgUrl.includes('.gif')) continue;
+              listingImgs[index] = backgroundImgUrl; // Save the img's url with an associated element index, for use later to find closest listing element
+              prevImgIndex = index;
+              
+            }
+          }
+
+          if (innerText) {
+            listingData.push({listingIndex: index, innerText, href});
+          }
+        }
+        
+        return [listingData, listingImgs];
+
+      }, getImgs);
+
+      
+    } catch(err) {
+      console.log('error retrieving data/images',err)
+    }
+    
+    //console.log('images:',  listingImgs, 'length', Object.keys(listingImgs).length);
+    //console.log("Searching for listings on:", page.url())
+
+    const yearPattern = /(\d{4})/g;
+    for (const { listingIndex, innerText, href } of listingData ) {
+      const trimmedText = innerText.trim().replace(/\r?\n|\r|\s+/,' '); // Clean white space
+      // Look for substrings of 4 digits
+      const matches = trimmedText.match(yearPattern);
+      
+      // Check if any of the digit substrings are in the correct range
+      const validMatch = matches?.find(match => {
+        const year = parseInt(match);
+        return year >= LOWER_YEAR_BOUND && year <= UPPER_YEAR_BOUND;
+      });
+
+      if (validMatch) {
+        const listingUrl = getNewUrl(href, page);
+
+        if (!listingUrls.has(listingUrl)) {
+
+          //console.log(`listing found: ${innerText}`)
+          //const listingImage = await getListingImage(anchorHandle, page);
+
+          // Find the closest image to the listing
+          let listingImg;
+          if (listingImgs) {
+
+            const listingImgIndices = Object.keys(listingImgs); // Indices of the images
+            let closestImgIndex = listingImgIndices[listingImgIndices.length - 1]; // Default to last img
+            let i = 0; 
+
+            while (i < listingImgIndices.length) {
+
+              const imgDistance = Math.abs(listingImgIndices[i] - listingIndex);
+              const nextImgDistance = Math.abs(listingImgIndices[i + 1] - listingIndex);
+              if (nextImgDistance > imgDistance) {
+                //console.log(`listingImgIndices[i]: ${listingImgIndices[i]} | listingIndex: ${listingIndex}`)
+                closestImgIndex =  listingImgIndices[i];
+                break;
+              }
+
+              i++;
+            }
+
+            listingImg = listingImgs[closestImgIndex];
+            //console.log(`closest img: ${closestImgIndex} | listingIndex: ${listingIndex}`)
+          }
+
+          listingUrls.add(listingUrl);
+          listings.push({listing: trimmedText, img: listingImg, url: listingUrl})
+        }
+      }
+    }; 
+
+    console.log(Object.keys(listingImgs));
+  }
 }
 
 function logNestedObject(obj, indent = '') {
@@ -164,7 +375,6 @@ async function sortedPageSearch(page, keywords, anchorContentSearch, innerTextSe
           // // Pull the hrefs from the anchors
           
           const hrefs = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => element.getAttribute('href'), elem)));
-  
           let matchingHref;    
           if (keyword === 'new') {
             matchingHref = hrefs?.find(href => 
@@ -181,6 +391,7 @@ async function sortedPageSearch(page, keywords, anchorContentSearch, innerTextSe
           }
           if (matchingHref) {
             sortedHrefs[keyword] = getNewUrl(matchingHref,page);
+            
           }
         }
       }
@@ -215,7 +426,8 @@ async function sortedPageSearch(page, keywords, anchorContentSearch, innerTextSe
       } 
     // Search for keywords in the hrefs
     } else if (anchorContentSearch && keywords.length === 0) {
-      const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${anchorContentSearch}")]`; 
+      console.log('searching hrefs')
+      const xpath = `//a[contains(translate(@href, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${anchorContentSearch}")]`; 
       const elementHandles = await page.$x(xpath);
       
       if (elementHandles.length > 0) {
@@ -230,6 +442,7 @@ async function sortedPageSearch(page, keywords, anchorContentSearch, innerTextSe
   }  catch (err) {
     console.log("Error getting sorted anchor hrefs:", err);
   } finally {
+    console.log('inventory pages found', sortedHrefs);
     return sortedHrefs;
   }
 }
@@ -278,6 +491,8 @@ function isValidInventoryPageSet(hrefs) {
  * @throws {err} - If there is an error getting the inventory pages.
  */
 async function getInventoryPages (url, browser, makes) {
+  const INVENTORY_KEYWORDS = ["new","used","owned","all","inventory"];
+  const HOME_KEYWORDS = ["home"];
   let page, hrefs, forSaleUrl, forSaleHref;
   let inventoryPages = new Map();
   try {
@@ -285,21 +500,26 @@ async function getInventoryPages (url, browser, makes) {
     if (!page) {
       return null;
     }
-    const inventoryKeywords = ["new","used","all","owned","inventory"];
-    const homeKeywords = ["home"];
-
-    // First make sure we are on the home page
-    hrefs = await sortedPageSearch(page,homeKeywords);
-    if (hrefs["home"]) {
-      console.log("Going to home page")
-      const homeUrl = getNewUrl(hrefs["home"],page);
-      await page.goto(homeUrl,{ waitUntil: 'networkidle2' });
-    }
     
     // Search for links to inventory pages
-    hrefs = await sortedPageSearch(page,inventoryKeywords);
+    hrefs = await sortedPageSearch(page,INVENTORY_KEYWORDS);
     console.log("hrefs:", hrefs);
     let validInventoryPageSet = isValidInventoryPageSet(hrefs);
+
+    // Try to go home
+    if (!validInventoryPageSet) {
+      hrefs = await sortedPageSearch(page,[],HOME_KEYWORDS);
+      if (hrefs["home"]) {
+        console.log("Going to home page")
+        const homeUrl = getNewUrl(hrefs["home"],page);
+        await page.goto(homeUrl,{ waitUntil: 'networkidle2' });
+      }
+
+      // Search again for links to inventory pages
+      hrefs = await sortedPageSearch(page,INVENTORY_KEYWORDS);
+      console.log("hrefs:", hrefs);
+      validInventoryPageSet = isValidInventoryPageSet(hrefs);
+    }
 
     // If there are no inventory pages, look for a for sale page.
     if (!validInventoryPageSet) {
@@ -311,23 +531,20 @@ async function getInventoryPages (url, browser, makes) {
         forSaleUrl = getNewUrl(forSaleHref["for sale"],page);
         await page.goto(forSaleUrl,{ waitUntil: 'networkidle2' });
         // Search for links to inventory pages
-        hrefs = await sortedPageSearch(page,inventoryKeywords);
+        hrefs = await sortedPageSearch(page,INVENTORY_KEYWORDS);
         validInventoryPageSet = isValidInventoryPageSet(hrefs);
         console.log("hrefs:", hrefs);
       }
       
-
       // If there are still no inventory pages, look for the keywords in innerTexts rather than the hrefs.
       if (!validInventoryPageSet) {
         console.log("About to look for keywords in innerTexts");
-        hrefs = await sortedPageSearch(page,inventoryKeywords,'',true);
+        hrefs = await sortedPageSearch(page,INVENTORY_KEYWORDS,'',true);
         validInventoryPageSet = isValidInventoryPageSet(hrefs);
       }
     }
 
-    
-
-    // If there are no inventory pages, look for (a) make page(s).
+    // If there are _still_ no inventory pages, look for (a) make page(s).
     if (!validInventoryPageSet && !(forSaleHref || forSaleHref["for sale"])) {
       for (const make of makes) {
         console.log(`Searching for ${make} inventory page`);
@@ -342,28 +559,18 @@ async function getInventoryPages (url, browser, makes) {
       return inventoryPages;
     }
 
-    // Inventory pages to return depending on what was found
-    if (hrefs['new'] && hrefs['owned']) {
-      inventoryPages.set("new", await goToNewTab(hrefs["new"],browser));
-      inventoryPages.set("owned", await goToNewTab(hrefs["owned"],browser));
-    } else if (hrefs['new'] && hrefs['used']) {
-      inventoryPages.set("new", await goToNewTab(hrefs["new"],browser));
-      inventoryPages.set("used", await goToNewTab(hrefs["used"],browser));
-    } else if (hrefs["inventory"]){
-      inventoryPages.set("inventory", await goToNewTab(hrefs["inventory"],browser));
-    } else if (hrefs["all"]) {
-      inventoryPages.set("all", await goToNewTab(hrefs["all"],browser));
-    } else if (forSaleHref && forSaleHref["for sale"]) {
-      inventoryPages.set("inventory", await goToNewTab(forSaleHref["for sale"],browser));
-    } else {
-      console.log("No suitable invetory groups found, returning any pages that were found.")
+    if (Object.keys(hrefs).length > 0) {
       for (const category in hrefs) {
         if (hrefs.hasOwnProperty(category)) {
           inventoryPages.set(category, await goToNewTab(hrefs[category],browser));
         }
       }
+    } else if (forSaleHref && forSaleHref["for sale"]) {
+      inventoryPages.set("inventory", await goToNewTab(forSaleHref["for sale"],browser));
+    } else {
+      console.log('No inventory pages found')
     }
-
+      
   console.log("Inventory pages retrieved");
   return inventoryPages;
   } catch (err) {
@@ -432,7 +639,7 @@ async function nextElementHref(page, element) {
  * @param {string} inventoryType - The type of inventory.
  * @returns {Promise<Page|null>} - The page object after the click event, or null if there was an error.
  */
-async function handleElement(page, nextElement,inventoryType, makes) {
+async function handleElement(page, nextElement,inventoryType) {
   const DELAY_MS = 500;
   const TIMEOUT_MS = 15000;
 
@@ -463,7 +670,7 @@ async function handleElement(page, nextElement,inventoryType, makes) {
     let requestCount = 0;
     let responseCount = 0;
     let loadEvent = false;
-    const prevListings = await pageListings(page, makes);
+    const prevListings = await pageListings(page);
     await page.setRequestInterception(true);
     page.on('request', interceptedRequest => {
       requestCount++;
@@ -504,24 +711,24 @@ async function handleElement(page, nextElement,inventoryType, makes) {
         console.log("Navigation event finished");
         break;
       }
-      if (networkIdle) {
-        try {
-          if (page) {
-            listings = await pageListings(page, makes);
-            const newListings = JSON.stringify(listings) != JSON.stringify(prevListings);
-            if (!newListings) console.log("No new listings found");
-            const pageLoaded = await page.evaluate(() => {
-              return document.readyState === 'complete';
-            });
-            if (pageLoaded && newListings) {
-              console.log("Page loaded and new listings found");
-              break;
-            }
+      try {
+
+        if (networkIdle && page) {      
+          listings = await pageListings(page);
+          const newListings = JSON.stringify(listings) != JSON.stringify(prevListings);
+          if (!newListings) console.log("No new listings found");
+          const pageLoaded = await page.evaluate(() => {
+            return document.readyState === 'complete';
+          });
+          if (pageLoaded && newListings) {
+            console.log("Page loaded and new listings found");
+            break;
           }
-        } catch(err) {
-          console.log("Error accessing document ready state:");
         }
+      } catch(err) {
+        console.log("Error accessing document ready state:");
       }
+      
         // console.log(`networkIdle: ${networkIdle} | requestsFulfilled: ${requestsFulfilled} | withinTimeout: ${withinTimeout}`);
     } while (withinTimeout);
 
@@ -548,7 +755,7 @@ async function handleElement(page, nextElement,inventoryType, makes) {
  * @param {string} inventoryType - The type of inventory (new, used, etc).
  * @returns {Promise<Page|null>} - A promise that resolves to the next page of inventory, or null if no next page is found.
  */
-async function getNextPage(page, inventoryType, makes) {
+async function getNextPage(page, inventoryType) {
   const xpaths = [
     `//*[@aria-label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]]`,
     `//*[@title[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "next")]]`,
@@ -566,7 +773,8 @@ async function getNextPage(page, inventoryType, makes) {
       elementHandles.reverse();
       // Attempt to click each element
       for (const handle of elementHandles) {
-        const nextPage = await handleElement(page, handle, inventoryType, makes);
+        
+        const nextPage = await handleElement(page, handle, inventoryType);
         if (nextPage) {
           console.log("element clicked"); 
           // Successfully retrieved the next page
@@ -598,24 +806,24 @@ function isNewListings(listingsData, newListings) {
  * @param {Array} listingsData - The array to store the retrieved listings.
  * @returns {Promise<Array>} - A promise that resolves to an array of listings data.
  */
-async function allPageListings(page, inventoryType, makes, listingsData = []) {
-  
+async function allPageListings(page, inventoryType, listingsData = []) {
   try {
     // Search for listings on the current page
     const url= page.url();
     console.log("getting listings on:", url);
-    const listings = await pageListings(page, makes);
+    
+    const listings = await pageListings(page, { getImgs: true })
 
-    // Add the listings to the accumulator array
+    // Add listings to the accumulator
     if (listings) {
       listingsData.push(...listings)
     }
 
-    console.log(`Listings for page ${listingsData.length + 1}: ${url}`);
-    logNestedObject(listings);
+    //console.log(`Listings for page ${listingsData.length + 1}: ${url}`);
+    //logNestedObject(listings);
     
     // Retrieve the next page
-    const nextPage = await getNextPage(page, inventoryType, makes);
+    const nextPage = await getNextPage(page, inventoryType);
     console.log("getNextPage returned");
     if (!nextPage) {
       console.log("No clickable next page elements found");
@@ -623,12 +831,12 @@ async function allPageListings(page, inventoryType, makes, listingsData = []) {
     }
 
     console.log("Next page loaded")
-    const nextPageListings = await pageListings(nextPage, makes);
+    const nextPageListings = await pageListings(nextPage);
     let listingsDiff = isNewListings(listingsData, nextPageListings);
     // Compare the current page listings to the next page listings
     // Keep searching if they are different
     if (listingsDiff) {
-      await allPageListings(nextPage, inventoryType, makes, listingsData);
+      await allPageListings(nextPage, inventoryType, listingsData);
     }
 
     console.log("End of inventory"); 
@@ -639,53 +847,3 @@ async function allPageListings(page, inventoryType, makes, listingsData = []) {
   }
 }
 
-export default async function getInfo(urls) {
-  const beginDate = new Date();
-  const BeginDateTime = `${beginDate.getMonth()+1}-${beginDate.getDate()}_${beginDate.getHours()}-${beginDate.getMinutes()}-${beginDate.getSeconds()}`;
-  let browser;
-  const makes = ['agusta', 'aprilia', 'benelli', 'bmw', 'can-am', 'cf moto', 'ducati', 'greenger', 'guzzi', 'harley',  'hisun', 'honda', 'husqvarna', 'indian', 'karavan', 'kawasaki', 'ktm', 'kymco', 'mv agusta', 'polaris', 'royal enfield ', 'ssr', 'stacyc', 'suzuki', 'triumph', 'yamaha', 'beta', 'kayo', 'moke'];
-  try {
-    browser = await puppeteer.launch({headless: false});
-    // Get the hrefs that link to inventory pages
-    
-    let inventoryUrl;
-    for (const url of urls) {
-      console.log(`Getting listings for ${url}`);
-      const dealershipListings = {dealershipUrl: url};
-      try {
-        const inventoryPages = await getInventoryPages(url, browser, makes);
-
-        // const page = await goToNewTab("https://www.indianmotorcycleorangecounty.com/new-motorcycles-for-sale--inventory?condition=new&pg=1&sortby=Price|desc",browser);
-        // const inventoryPages = new Map([["new", page]]);
-        const inventoryTypeListings = [];
-        for (const  [inventoryType,page] of inventoryPages){
-          inventoryUrl = page.url()
-          console.log(`Getting '${inventoryType}' listings for ${inventoryUrl}`)
-          await page.bringToFront();
-          const tempListings = await allPageListings(page, inventoryType, makes);
-          
-          inventoryTypeListings.push(...tempListings);
-          dealershipListings[inventoryType] = inventoryTypeListings;
-          await page.close();
-        }
-        
-      } catch(err) {
-        console.log(`Error getting listings for ${inventoryUrl}`)
-      }
-      // try {
-      //   const dealershipListingsJson = JSON.stringify(dealershipListings, null, 2);
-      //   fs.appendFile(`./app/api/getBikeInfo/results/listingResults${BeginDateTime}.json`, `${dealershipListingsJson},\n`, 'utf-8');
-      //   console.log(`All listings for ${url}: ${dealershipListingsJson}`)
-      // } catch (err) {
-      //   console.log("Error writing listings to file:", err);
-      // }
-    } 
-
-    return "All the info";
-
-  } catch (err) {
-  console.error('Error:', err);
-  } finally {
-    await browser.close();
-  }
-}
