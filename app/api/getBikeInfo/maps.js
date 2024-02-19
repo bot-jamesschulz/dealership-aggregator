@@ -121,7 +121,6 @@ export default async function getDealerships() {
             'X-Goog-FieldMask': nearbyFieldMask,
         }
     };
-
     
     try {
         // const filteredUrls = allUrls.filter(url => !url.includes('facebook'));
@@ -253,11 +252,12 @@ export default async function getDealerships() {
     };
     //return [websites[0],websites[1],websites[3],websites[4],websites[5],websites[6],websites[7],websites[8],websites[9]];
     //return testingWebsites.slice(6,7);
-    //return testingWebsites.slice(2,3);
-    return [testingWebsites[3]];
+    //return testingWebsites.slice(11);
+    //return [testingWebsites[11]];
     //return websites.slice(0,20)
     //return websites25KM;
     //return ["http://www.bertsmegamall.com/?utm_source=google&utm_medium=organic&utm_campaign=GMB-service"];
     //return filteredUrls.slice(0,600);
-    //return cleanedUrls.slice(0,703);
+    //return cleanedUrls.slice(411,703);
+    return [cleanedUrls[413]];
 };

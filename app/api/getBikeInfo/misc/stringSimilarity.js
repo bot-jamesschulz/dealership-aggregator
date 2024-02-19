@@ -16,7 +16,7 @@ const fuse = new Fuse([],options);
 fuse.setCollection([listing]);
 const fuseResults = fuse.search(model);
 if (!fuseResults) {
-    console.log('no reulkts')
+    console.log('no results')
 }
 const fuseModelIndexes = fuseResults[0]?.matches[0]?.indices;
 console.log('fuse results', fuseResults);

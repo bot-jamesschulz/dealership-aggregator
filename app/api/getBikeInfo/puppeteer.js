@@ -5,81 +5,93 @@ import fs from 'fs/promises';
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-
 export default async function getInfo(urls) {
-  const beginDate = new Date();
-  const BeginDateTime = `${beginDate.getMonth()+1}-${beginDate.getDate()}_${beginDate.getHours()}-${beginDate.getMinutes()}-${beginDate.getSeconds()}`;
+  const path = `./app/api/getBikeInfo/results/listings/listingResults/results.json`;
   const makes = ['agusta', 'aprilia', 'benelli', 'bmw', 'can-am', 'cf moto', 'ducati', 'greenger', 'guzzi', 'harley',  'hisun', 'honda', 'husqvarna', 'indian', 'karavan', 'kawasaki', 'ktm', 'kymco', 'mv agusta', 'polaris', 'royal enfield ', 'ssr', 'stacyc', 'suzuki', 'triumph', 'yamaha', 'beta', 'kayo', 'moke'];
   const MIN_VALID_LISTINGS = 25;
+  const allListings = [];
   let browser;
+
   
-  try {
-    browser = await puppeteer.launch({headless: false}); 
+  // Extract listing info from each website
+  for (const url of urls) {
     
+    const dealershipListings = {dealershipUrl: url};
     let inventoryUrl;
-    // Extract listing info from each website
-    for (const url of urls) {
+    try {
+      browser = await puppeteer.launch({headless: false});
       console.log(`Getting listings for ${url}`);
-      const dealershipListings = {dealershipUrl: url};
-      try {
-        const inventoryPages = await getInventoryPages(url, browser, makes); 
-
-        // const page = await goToNewTab("https://www.motounitedwhittier.com/default.asp?page=xNewInventory",browser);
-        // const inventoryPages = new Map([["new", page]]);
-        console.log('inventory pages', inventoryPages.keys())
-        // Extract listing from each type of inventory page (e.g. 'new', 'used')
-        for (const  [ inventoryType, page ] of inventoryPages){
       
+      const inventoryPages = await getInventoryPages(url, browser, makes); 
+
+      // const page = await goToNewTab("https://www.orangecountyhd.com/inventory/New/",browser);
+      // const inventoryPages = new Map([["new", page]]);
+      
+      console.log('inventory pages', inventoryPages?.keys())
+
+      // Extract listing from each type of inventory page (e.g. 'new', 'used')
+      for (const  [ inventoryType, page ] of inventoryPages){
+        console.log('testh')
+        try {
           let listingsByType;
-          try {
 
-            // If we have listings in new and used then close out the remaining pages
-            if (dealershipListings['new']?.length > MIN_VALID_LISTINGS && (dealershipListings['used']?.length > MIN_VALID_LISTINGS || dealershipListings['owned']?.length > MIN_VALID_LISTINGS)) {
-              console.log('found listings in all required categories... exiting')
-              await page?.close();
-              continue;
-            }
+          // If we have listings in new and used then close out the remaining pages
+          if (dealershipListings['new']?.length > MIN_VALID_LISTINGS && (dealershipListings['used']?.length > MIN_VALID_LISTINGS || dealershipListings['owned']?.length > MIN_VALID_LISTINGS)) {
+            console.log('found listings in all required categories... exiting')
+            page?.close();
+            continue;
+          }
 
-            inventoryUrl = page.url()
-            console.log(`Getting '${inventoryType}' listings for ${inventoryUrl}`)
-            await page.bringToFront();
-            // Iterate through all pages of the inventory type (e.g. pages 1-10 of 'new')
-            listingsByType = await allPageListings(page, inventoryType);
-            
-            if (listingsByType.length > 0) {
-              dealershipListings[inventoryType] = listingsByType;
-            }
-
-            
+          inventoryUrl = page.url();
           
-          } catch(err) {
-            console.log(`error getting ${inventoryType} listings`, err)
-          } finally {
-            try {
-              await page?.close();
-            } catch (err) {
-                console.log(`Error closing page for ${inventoryType}:`, err);
-            }
+          console.log(`Getting '${inventoryType}' listings for ${inventoryUrl}`);
+          
+          await page.bringToFront();
+
+          // Iterate through all pages of the inventory type (e.g. pages 1-10 of 'new')
+          listingsByType = await allPageListings(page, inventoryType);
+          
+          if (listingsByType.length > 0) {
+            dealershipListings[inventoryType] = listingsByType;
+          }
+
+        } catch(err) {
+          console.log(`error getting ${inventoryType} listings`, err);
+        } finally {
+          try {
+            page.close();
+          } catch (err) {
+              console.log(`Error closing page for ${inventoryType}:`, err);
           }
         }
-      } catch(err) {
-        console.log(`Error getting listings for ${inventoryUrl}`)
+        console.log('testg')
       }
+      console.log('testu')
+      
+    } catch(err) {
+      console.log(`Error getting listings for ${inventoryUrl}`)
+    } finally {
+      allListings.push(dealershipListings);
       try {
-        const dealershipListingsJson = JSON.stringify(dealershipListings, null, 2);
-        fs.appendFile(`./app/api/getBikeInfo/results/listingResults${BeginDateTime}.json`, `${dealershipListingsJson},\n`, 'utf-8');
+        console.log('testk')
+        if (browser.isConnected()) await browser.close();     
+        console.log('testl')
       } catch (err) {
-        console.log("Error writing listings to file:", err);
+          console.log(`Error closing browser:`, err);
       }
     } 
+  } 
+  console.log('testi')
+  
 
-    return "All the info";
-
+  try {      
+    console.log('writing')
+    const allListingsJson = JSON.stringify(allListings, null, 2);
+    await fs.writeFile(path, allListingsJson, 'utf-8');
   } catch (err) {
-  console.error('Error:', err);
-  } finally {
-    await browser.close();
+    console.log("Error writing listings to file:", err);
   }
+  return "All the info";
 }
 
 /**
@@ -88,47 +100,64 @@ export default async function getInfo(urls) {
  * @param {Page} page - The Puppeteer page object.
  * @param {Object}  - An object containing options
  */
-async function waitForNetworkIdle(page, { minConnections = 0, idleTime = 1000, timeout = 5000 } = {}) {
-  let requestCount = 0;
-  let lastRequestCount = 0;
+async function waitForNetworkIdle(page, { idleTime = 750, timeout = 10000 } = {}) {
+  let requests = 0;
+  let finishedRequests = 0;
+  let prevRequests = 0;
+  let prevFinishedRequests = 0;
 
-  try {
+  const requestHandler = () => {
+    requests++;
+  };
 
-    page.on('request', () => {
-      requestCount++;
-    });
-    page.on('requestfinished', () => {
-      requestCount--;
-      // console.log("response #", responseCount);
-    });
-    page.on('requestfailed', () => {
-      requestCount--;
-    });
+  const requestFinishedHandler = () => {
+    finishedRequests++;
+  };
 
-    return new Promise((resolve,reject) => {
+  const requestFailedHandler = () => {
+    finishedRequests++;
+  };
 
-      setTimeout(() => {
-        reject(new Error('waitForNetworkIdle timed out'));
-      },timeout);
+  return new Promise((resolve,reject) => {
 
-      const interval = setInterval(() => {
-        console.log('network status:', requestCount, lastRequestCount);
-        if (requestCount === lastRequestCount && requestCount <= minConnections) {
-          clearInterval(interval);
-          resolve();
-        } else {
-          
-          lastRequestCount = requestCount;
-        }
-      }, idleTime);
-    });
-  } catch {
-    console.log('error while waiting for network idle')
-  } finally {
-    page?.off('request');
-    page?.off('requestfinished');
-    page?.off('requestfailed');
-  }
+    page.on('request', requestHandler);
+    page.on('requestfinished', requestFinishedHandler);
+    page.on('requestfailed', requestFailedHandler);
+
+    const timeoutID = setTimeout(() => {
+
+      clearInterval(intervalID);
+      page.off('request', requestHandler);
+      page.off('requestfinished', requestFinishedHandler);
+      page.off('requestfailed', requestFailedHandler);
+
+      reject(new Error('waitForNetworkIdle timed out'));
+
+    },timeout);
+
+    const intervalID = setInterval(() => {
+      
+      console.log('network status:', `\n requests ${requests} \n prevRequests ${prevRequests} \n finishedRequests ${finishedRequests} \n prevfinishedRequests ${prevFinishedRequests}`);
+      
+      if (requests === prevRequests && finishedRequests === prevFinishedRequests) {
+        
+        clearTimeout(timeoutID);
+        clearInterval(intervalID);
+
+        page.off('request', requestHandler);
+        page.off('requestfinished', requestFinishedHandler);
+        page.off('requestfailed', requestFailedHandler);
+
+        resolve();
+
+      } else {
+        
+        prevRequests = requests;
+        prevFinishedRequests = finishedRequests;
+      }
+    }, idleTime);
+  });
+  
 }
 
 
@@ -139,10 +168,11 @@ async function waitForNetworkIdle(page, { minConnections = 0, idleTime = 1000, t
  * @param {Object}  - An options object specifying if images should be retrieved.
  * @returns {Object} - An object containing the vehicle information.
  */
-async function pageListings(page, { getImgs = false } = {}) {
-  const TIMEOUT = 10000;
-  const LOWER_YEAR_BOUND = 1950;
-  const UPPER_YEAR_BOUND = new Date().getFullYear() + 2;
+async function pageListings(page) {
+  const TIMEOUT = 10000; // ms
+  const LOWER_YEAR_BOUND = 1950; // year
+  const UPPER_YEAR_BOUND = new Date().getFullYear() + 2; //current year + 2
+  const VIEWPORT_WIDTH = 1920; // px
   const listings = [];
   const listingUrls = new Set();
   let listingData, listingImgs;
@@ -155,10 +185,14 @@ async function pageListings(page, { getImgs = false } = {}) {
     }, TIMEOUT); 
   });
   
-  await Promise.race([
-    timeout, 
-    getListings()
-  ]);
+  try {
+    await Promise.race([
+      timeout, 
+      getListings()
+    ]);
+  } catch (err) {
+    console.log('error waiting for listings', err)
+  }
 
   return listings;
 
@@ -166,41 +200,42 @@ async function pageListings(page, { getImgs = false } = {}) {
   
     try {
 
-      if (getImgs) {
-        const pageHeight = await page.evaluate(() => document.body.scrollHeight);
-        // Set the viewport size to cover the entire page height
-        await page.setViewport({ width: 1920, height: pageHeight});
-    
-        await page.evaluate(async () => {
-          await new Promise((resolve) => {
-              let totalHeight = 0;
-              const distance = 400;
-              const timer = setInterval(() => {
-                  var scrollHeight = document.body.scrollHeight;
-                  window.scrollBy(0, distance);
-                  totalHeight += distance;
 
-                  if(totalHeight >= scrollHeight - window.innerHeight){
-                      clearInterval(timer);
-                      resolve();
-                  }
-              }, 100);
-          });
+      const pageHeight = await page.evaluate(() => document.body.scrollHeight);
+      // Set the viewport size to cover the entire page height
+      await page.setViewport({ width: VIEWPORT_WIDTH, height: pageHeight});
+  
+      await page.evaluate(async () => {
+        await new Promise((resolve) => {
+          let totalHeight = 0;
+          const distance = 400;
+          const timer = setInterval(() => {
+            var scrollHeight = document.body.scrollHeight;
+            window.scrollBy(0, distance);
+            totalHeight += distance;
+
+            if(totalHeight >= scrollHeight - window.innerHeight){
+              clearInterval(timer);
+              resolve();
+            }
+          }, 100);
         });
+      });
 
-        // Make sure lazy loaded images get loaded
-        try { 
-          await waitForNetworkIdle(page, { minConnections: 2 });
-        } catch(err) {
-          console.log('timeout exceeded while waiting for lazy loaded images')
-        }
+      // Make sure lazy loaded images get loaded
+      try { 
+        console.log('testa');
+        await waitForNetworkIdle(page);
+        console.log('teste')
+      } catch(err) {
+        console.log('timeout exceeded while waiting for lazy loaded images')
       }
-
+      
       // Extract the images/listings from the page, keyed by their position in the DOM
-      [ listingData, listingImgs ] = await page.evaluate((getImgs) => {
+      [ listingData, listingImgs ] = await page.evaluate(() => {
         const MINIMUM_IMG_DIST = 10;
         const listingImgs = {};
-        let prevImgIndex = null;
+        let prevImgIndex = 0;
         const listingData = [];
         const elementNodes = document.querySelectorAll('*');
         const elements = Array.from(elementNodes);
@@ -218,42 +253,52 @@ async function pageListings(page, { getImgs = false } = {}) {
           }
 
           let closestImgDist = Math.abs(prevImgIndex-index);
-          if (getImgs) {
-            // Make sure that the image isn't part of a subsection/gallery of images
-            if (element.tagName === "IMG" && closestImgDist > MINIMUM_IMG_DIST) {
-              const waitInterval = 100; // Time to wait before checking the src attribute again
-              const maxWaitTime = 5000; // Maximum wait time for checking src
-              let elapsedTime = 0;
-              
-              // Wait for src attribute to be set
-              const waitForSrc = () => {
-                if (element.getAttribute('src') !== null) {
-                  const url = new URL(element.getAttribute('src'), window.location.href )
-                  listingImgs[index] = url.href; // Save the img's url with an associated element index, for use later to find closest listing element
-                  prevImgIndex = index;
-                  return;
-                }
+          
+          // Make sure that the image isn't part of a subsection/gallery of images
+          if (element.tagName === "IMG" && closestImgDist > MINIMUM_IMG_DIST) {
+            const waitInterval = 100; // Time to wait before checking the src attribute again
+            const maxWaitTime = 5000; // Maximum wait time for checking src
+            let elapsedTime = 0;
+            
+            // Wait for src attribute to be set
+            const waitForSrc = () => {
+              if (element.getAttribute('src')) {
+                const url = new URL(element.getAttribute('src'), window.location.href )
+                listingImgs[index] = url.href; // Save the img's url with an associated element index, for use later to find closest listing element
+                prevImgIndex = index;
+                return;
+              }
 
-                elapsedTime += waitInterval;
-                if (elapsedTime < maxWaitTime) {
-                  setTimeout(waitForSrc, waitInterval);
-                }
-              };
+              if (element.getAttribute('srcset')) {
+                let url;
+                url = element.getAttribute('srcset');
+                listingImgs[index] = url; // Save the img's url with an associated element index, for use later to find closest listing element
+                prevImgIndex = index;
 
-              waitForSrc();
-            }
+                return;
+                
+              }
 
-            // Make sure that the background-image isn't part of a subsection/gallery of images
-            if (backgroundImg && closestImgDist > MINIMUM_IMG_DIST) {
+              elapsedTime += waitInterval;
+              if (elapsedTime < maxWaitTime) {
+                setTimeout(waitForSrc, waitInterval);
+              }
+            };
 
-              const backgroundImgUrlMatch = backgroundImg.match(/url\("(.+)"\)/); // Extract the url
-              const backgroundImgUrl = backgroundImgUrlMatch ? backgroundImgUrlMatch[1] : null;
-              if (!backgroundImgUrl || backgroundImgUrl.includes('.gif')) continue;
-              listingImgs[index] = backgroundImgUrl; // Save the img's url with an associated element index, for use later to find closest listing element
-              prevImgIndex = index;
-              
-            }
+            waitForSrc();
           }
+
+          // Make sure that the background-image isn't part of a subsection/gallery of images
+          if (backgroundImg && closestImgDist > MINIMUM_IMG_DIST) {
+
+            const backgroundImgUrlMatch = backgroundImg.match(/url\("(.+)"\)/); // Extract the url
+            const backgroundImgUrl = backgroundImgUrlMatch ? backgroundImgUrlMatch[1] : null;
+            if (!backgroundImgUrl || backgroundImgUrl.includes('.gif')) continue;
+            listingImgs[index] = backgroundImgUrl; // Save the img's url with an associated element index, for use later to find closest listing element
+            prevImgIndex = index;
+            
+          }
+          
 
           if (innerText) {
             listingData.push({listingIndex: index, innerText, href});
@@ -262,66 +307,71 @@ async function pageListings(page, { getImgs = false } = {}) {
         
         return [listingData, listingImgs];
 
-      }, getImgs);
+      }, );
 
       
     } catch(err) {
-      console.log('error retrieving data/images',err)
+      console.log('error retrieving data/images from the DOM',err)
+      return;
     }
     
     //console.log('images:',  listingImgs, 'length', Object.keys(listingImgs).length);
     //console.log("Searching for listings on:", page.url())
 
-    const yearPattern = /(\d{4})/g;
-    for (const { listingIndex, innerText, href } of listingData ) {
-      const trimmedText = innerText.trim().replace(/\r?\n|\r|\s+/,' '); // Clean white space
-      // Look for substrings of 4 digits
-      const matches = trimmedText.match(yearPattern);
-      
-      // Check if any of the digit substrings are in the correct range
-      const validMatch = matches?.find(match => {
-        const year = parseInt(match);
-        return year >= LOWER_YEAR_BOUND && year <= UPPER_YEAR_BOUND;
-      });
+     try { 
+      const yearPattern = /(\d{4})/g;
+      for (const { listingIndex, innerText, href } of listingData ) {
+        const trimmedText = innerText.trim().replace(/\r?\n|\r|\s+/,' '); // Clean white space
+        // Look for substrings of 4 digits
+        const matches = trimmedText.match(yearPattern);
+        
+        // Check if any of the digit substrings are in the correct range
+        const validMatch = matches?.find(match => {
+          const year = parseInt(match);
+          return year >= LOWER_YEAR_BOUND && year <= UPPER_YEAR_BOUND;
+        });
 
-      if (validMatch) {
-        const listingUrl = getNewUrl(href, page);
+        if (validMatch) {
+          const listingUrl = getNewUrl(href, page);
 
-        if (!listingUrls.has(listingUrl)) {
+          if (!listingUrls.has(listingUrl)) {
 
-          //console.log(`listing found: ${innerText}`)
-          //const listingImage = await getListingImage(anchorHandle, page);
+            //console.log(`listing found: ${innerText}`)
+            //const listingImage = await getListingImage(anchorHandle, page);
 
-          // Find the closest image to the listing
-          let listingImg;
-          if (listingImgs) {
+            // Find the closest image to the listing
+            let listingImg;
+            if (listingImgs) {
 
-            const listingImgIndices = Object.keys(listingImgs); // Indices of the images
-            let closestImgIndex = listingImgIndices[listingImgIndices.length - 1]; // Default to last img
-            let i = 0; 
+              const listingImgIndices = Object.keys(listingImgs); // Indices of the images
+              let closestImgIndex = listingImgIndices[listingImgIndices.length - 1]; // Default to last img
+              let i = 0; 
 
-            while (i < listingImgIndices.length) {
+              while (i < listingImgIndices.length) {
 
-              const imgDistance = Math.abs(listingImgIndices[i] - listingIndex);
-              const nextImgDistance = Math.abs(listingImgIndices[i + 1] - listingIndex);
-              if (nextImgDistance > imgDistance) {
-                //console.log(`listingImgIndices[i]: ${listingImgIndices[i]} | listingIndex: ${listingIndex}`)
-                closestImgIndex =  listingImgIndices[i];
-                break;
+                const imgDistance = Math.abs(listingImgIndices[i] - listingIndex);
+                const nextImgDistance = Math.abs(listingImgIndices[i + 1] - listingIndex);
+                if (nextImgDistance > imgDistance) {
+                  //console.log(`listingImgIndices[i]: ${listingImgIndices[i]} | listingIndex: ${listingIndex}`)
+                  closestImgIndex =  listingImgIndices[i];
+                  break;
+                }
+
+                i++;
               }
 
-              i++;
+              listingImg = listingImgs[closestImgIndex];
+              //console.log(`closest img: ${closestImgIndex} | listingIndex: ${listingIndex}`)
             }
 
-            listingImg = listingImgs[closestImgIndex];
-            //console.log(`closest img: ${closestImgIndex} | listingIndex: ${listingIndex}`)
+            listingUrls.add(listingUrl);
+            listings.push({listing: trimmedText, img: listingImg, url: listingUrl})
           }
-
-          listingUrls.add(listingUrl);
-          listings.push({listing: trimmedText, img: listingImg, url: listingUrl})
-        }
+        }    
       }
-    }; 
+    } catch (err) {
+      console.log('error parsing listing/image data', err)
+    }
 
     console.log(Object.keys(listingImgs));
   }
@@ -364,98 +414,110 @@ function getNewUrl(href,page) {
 async function sortedPageSearch(page, keywords, anchorContentSearch, innerTextSearch) {
   let sortedHrefs = {};
   console.log(`innerTextSearch: ${innerTextSearch}`)
-  try {
-    // Search for keywords in the text content of the anchors
-    if (keywords.length > 0 && !innerTextSearch) {
-      for (const keyword of keywords) {
-        const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${keyword}")]`; 
-        const elementHandles = await page.$x(xpath);
+  
+  const timeout = new Promise(resolve => setTimeout(() => resolve(), 5000));
+
+  await Promise.race([search(), timeout]);
+
+  return sortedHrefs;
+
+  async function search() {
+    try {
+      // Search for keywords in the text content of the anchors
+      if (keywords.length > 0 && !innerTextSearch) {
+        for (const keyword of keywords) {
+          console.log('tests');
+          const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${keyword}")]`; 
+          const elementHandles = await page.$x(xpath);
+          console.log('testt');
+          if (elementHandles.length > 0) {
+            // // Pull the hrefs from the anchors
+            
+            const hrefs = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => element.getAttribute('href'), elem)));
+            let matchingHref;    
+            if (keyword === 'new') {
+              matchingHref = hrefs?.find(href => 
+                href?.toLowerCase().includes(keyword) 
+                && !href?.toLowerCase().includes('news')
+              );
+            } else if (keyword === 'all') {
+              matchingHref = hrefs?.find(href => 
+                href?.toLowerCase().includes(keyword) 
+                && !href?.toLowerCase().includes('gallery')
+              );
+            } else {
+              matchingHref = hrefs?.find(href => href?.toLowerCase().includes(keyword));
+            }
+            if (matchingHref) {
+              sortedHrefs[keyword] = getNewUrl(matchingHref,page);
+              
+            }
+          }
+        }
+
+      } else if (innerTextSearch) {
         
-        if (elementHandles.length > 0) {
-          // // Pull the hrefs from the anchors
+        // Keywords to search for in the innerText, if found, then add the href.
+        for (const keyword of keywords) {
+          const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${keyword}")]`; 
+          const elementHandles = await page.$x(xpath);
+          const elementInfo = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => ({ href: element.getAttribute('href'), innerText: element.innerText }), elem)));
+          console.log("searching in innertTexts")
           
-          const hrefs = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => element.getAttribute('href'), elem)));
-          let matchingHref;    
+          let matchingHref;
+
           if (keyword === 'new') {
-            matchingHref = hrefs?.find(href => 
-              href?.toLowerCase().includes(keyword) 
-              && !href?.toLowerCase().includes('news')
-            );
+            matchingHref = elementInfo?.find(elem => 
+              elem?.innerText?.toLowerCase().includes(keyword) 
+              && !elem?.innerText?.toLowerCase().includes('news')
+            )?.href;
           } else if (keyword === 'all') {
-            matchingHref = hrefs?.find(href => 
-              href?.toLowerCase().includes(keyword) 
-              && !href?.toLowerCase().includes('gallery')
-            );
-          } else {
-            matchingHref = hrefs?.find(href => href?.toLowerCase().includes(keyword));
+            matchingHref = elementInfo?.find(elem => 
+              elem?.innerText?.toLowerCase().includes(keyword) 
+              && !elem?.innerText?.toLowerCase().includes('gallery')
+            )?.href;
+          } else { 
+            matchingHref = elementInfo?.find(elem => elem?.innerText?.toLowerCase().includes(keyword))?.href;
           }
           if (matchingHref) {
             sortedHrefs[keyword] = getNewUrl(matchingHref,page);
-            
+          }
+        } 
+      // Search for keywords in the hrefs
+      } else if (anchorContentSearch && keywords.length === 0) {
+        console.log('searching hrefs')
+        const xpath = `//a[contains(translate(@href, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${anchorContentSearch}")]`; 
+        const elementHandles = await page.$x(xpath);
+        
+        if (elementHandles.length > 0) {
+          // Pull the hrefs from the anchors
+          const href = await page.evaluate(element => element.getAttribute('href'), elementHandles[0]);
+          if (href) {
+            sortedHrefs[anchorContentSearch] = getNewUrl(href,page);
           }
         }
+
       }
-
-    } else if (innerTextSearch) {
-      
-      // Keywords to search for in the innerText, if found, then add the href.
-      for (const keyword of keywords) {
-        const xpath = `//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${keyword}")]`; 
-        const elementHandles = await page.$x(xpath);
-        const elementInfo = await Promise.all(elementHandles.map(async elem => await page.evaluate(element => ({ href: element.getAttribute('href'), innerText: element.innerText }), elem)));
-        console.log("searching in innertTexts")
-        
-        let matchingHref;
-
-        if (keyword === 'new') {
-          matchingHref = elementInfo?.find(elem => 
-            elem?.innerText?.toLowerCase().includes(keyword) 
-            && !elem?.innerText?.toLowerCase().includes('news')
-          )?.href;
-        } else if (keyword === 'all') {
-          matchingHref = elementInfo?.find(elem => 
-            elem?.innerText?.toLowerCase().includes(keyword) 
-            && !elem?.innerText?.toLowerCase().includes('gallery')
-          )?.href;
-        } else { 
-          matchingHref = elementInfo?.find(elem => elem?.innerText?.toLowerCase().includes(keyword))?.href;
-        }
-        if (matchingHref) {
-          sortedHrefs[keyword] = getNewUrl(matchingHref,page);
-        }
-      } 
-    // Search for keywords in the hrefs
-    } else if (anchorContentSearch && keywords.length === 0) {
-      console.log('searching hrefs')
-      const xpath = `//a[contains(translate(@href, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${anchorContentSearch}")]`; 
-      const elementHandles = await page.$x(xpath);
-      
-      if (elementHandles.length > 0) {
-        // Pull the hrefs from the anchors
-        const href = await page.evaluate(element => element.getAttribute('href'), elementHandles[0]);
-        if (href) {
-          sortedHrefs[anchorContentSearch] = getNewUrl(href,page);
-        }
-      }
-
-    }
-  }  catch (err) {
-    console.log("Error getting sorted anchor hrefs:", err);
-  } finally {
-    console.log('inventory pages found', sortedHrefs);
-    return sortedHrefs;
+    } catch (err) {
+      console.log("Error getting sorted anchor hrefs:", err);
+    } 
   }
 }
 
 async function goToNewTab(url, browser) {
   let page;
+
   try {
+    if (!browser.isConnected()) return null;
+    console.log('testo')
     page = await browser.newPage();
+    console.log('testp')
     await page.goto(url,{ waitUntil: 'load' });
+    console.log('testq')
     return page;
   } catch(err) {
+    console.log('testr')
     console.log("Error going to new tab:", err);
-    await page.close();
     return null;
   }
 }
@@ -496,13 +558,17 @@ async function getInventoryPages (url, browser, makes) {
   let page, hrefs, forSaleUrl, forSaleHref;
   let inventoryPages = new Map();
   try {
+    console.log('testk')
     page = await goToNewTab(url,browser);
+    console.log('testl')
     if (!page) {
       return null;
     }
+    console.log('testm')
     
     // Search for links to inventory pages
     hrefs = await sortedPageSearch(page,INVENTORY_KEYWORDS);
+    console.log('testn')
     console.log("hrefs:", hrefs);
     let validInventoryPageSet = isValidInventoryPageSet(hrefs);
 
@@ -577,7 +643,11 @@ async function getInventoryPages (url, browser, makes) {
     console.error('Error getting inventory pages:', err);
     return null;
   } finally {
-    await page?.close();
+    try {
+      page.close();
+    } catch (err) {
+        console.log(`Error closing page:`, err);
+    }
   }
 }
 
@@ -640,11 +710,6 @@ async function nextElementHref(page, element) {
  * @returns {Promise<Page|null>} - The page object after the click event, or null if there was an error.
  */
 async function handleElement(page, nextElement,inventoryType) {
-  const DELAY_MS = 500;
-  const TIMEOUT_MS = 15000;
-
-  // const outerHTML = await nextElement.evaluate(node => node.outerHTML);
-  // console.log(`OuterHTML of clicked element: ${outerHTML}`);
 
   try {
     const href = await nextElementHref(page, nextElement);
@@ -664,87 +729,88 @@ async function handleElement(page, nextElement,inventoryType) {
     if (cursorType != "pointer") {
       return null
     }
-
-
-    // Monitor requests and responses
-    let requestCount = 0;
-    let responseCount = 0;
-    let loadEvent = false;
-    const prevListings = await pageListings(page);
-    await page.setRequestInterception(true);
-    page.on('request', interceptedRequest => {
-      requestCount++;
-      // console.log("request #", requestCount)
-      if (interceptedRequest.isInterceptResolutionHandled()) return;
-        else interceptedRequest.continue();
-    });
-    page.on('response', response => {
-      responseCount++;
-      // console.log("response #", responseCount);
-    });
-    page.on('load', () => {
-      loadEvent = true;
-    });
-    
-    await nextElement.scrollIntoView();
-    await nextElement.click();
-
-    // Wait for the network to be idle
-    const startTime = Date.now();
-    
-    let networkIdle, withinTimeout, navigationEventFinished, listings;
-    do {
-      const prevRequestCount = requestCount;
-      const prevResponseCount = responseCount;
-    
-      await delay(DELAY_MS);
-
-      networkIdle = requestCount === prevRequestCount && responseCount === prevResponseCount && responseCount > 1;
-      navigationEventFinished = loadEvent && responseCount > 1;
-      withinTimeout = Date.now() - startTime < TIMEOUT_MS;
-
-      console.log("Request count:", requestCount);
-      console.log("Response count:", responseCount);
-      console.log(`navigationEvenFinished: ${navigationEventFinished}`);
-
-      if (navigationEventFinished) {
-        console.log("Navigation event finished");
-        break;
-      }
-      try {
-
-        if (networkIdle && page) {      
-          listings = await pageListings(page);
-          const newListings = JSON.stringify(listings) != JSON.stringify(prevListings);
-          if (!newListings) console.log("No new listings found");
-          const pageLoaded = await page.evaluate(() => {
-            return document.readyState === 'complete';
-          });
-          if (pageLoaded && newListings) {
-            console.log("Page loaded and new listings found");
-            break;
-          }
-        }
-      } catch(err) {
-        console.log("Error accessing document ready state:");
-      }
-      
-        // console.log(`networkIdle: ${networkIdle} | requestsFulfilled: ${requestsFulfilled} | withinTimeout: ${withinTimeout}`);
-    } while (withinTimeout);
-
-    if (!withinTimeout) {
-      console.log("Timeout reached");
-      console.log(`prevListings: ${JSON.stringify(prevListings, null, 2)} \n listings: ${JSON.stringify(listings, null, 2)}`);
-    }
-    // console.log("Request count after polling:", requestCount);
-    // console.log("Response count after polling:", responseCount);
-    // console.log(`Isnavigating after polling: ${isNavigating}`)
-    return page;
   } catch (err) {
     console.log("Error clicking next element", err);
-  } finally {
-    page?.off('request');
-    page?.off('response');
+  } 
+
+
+  try {
+    const nextPage = Promise.race([
+      navigationIsComplete(page),
+      pageIsStatic(page)    
+    ])
+    console.log('testd')
+
+    await nextElement.scrollIntoView();
+
+    await nextElement.click();
+
+    console.log('waiting for new page')
+    await nextPage;
+    console.log('next page loaded')
+  } catch(err) {
+    console.log('teste')
+    console.log('error navigating to the next page', err)
+    return null;
+  }
+  console.log('testf')
+  return page;
+  
+}
+
+/**
+ * 
+ * @param {*} page 
+ * @returns 
+ */
+async function navigationIsComplete(page) {
+  return new Promise((resolve, reject) => {
+    const loadListener = () => {
+      console.log('navigation finished')
+      page.off('load', loadListener); 
+      resolve();
+    };
+
+    try {
+      page.on('load', loadListener);
+    } catch(err) {
+      reject(err);
+    }
+  });
+}
+
+/**
+ * 
+ * @param {*} page 
+ */
+async function pageIsStatic(page, attempts = 0) {
+  const maxAttempts = 5;
+  let pageLoaded;
+
+  try { 
+    console.log('testb');
+    await waitForNetworkIdle(page);
+    console.log('testb2');
+    if (page) {
+      pageLoaded = await page?.evaluate(() => document.readyState === 'complete');
+    }
+  } catch(err) {
+    console.log('Error accessing document ready state: ')
+  }
+
+  try {
+    if (!pageLoaded && attempts <= maxAttempts) {
+      await pageIsStatic(page, ++attempts);
+    }
+
+    if (attempts > maxAttempts) throw new Error('Max attempts for network idle reached')
+
+    console.log("Page is static");
+    return;
+  } catch (err) {
+    console.log('testc')
+    console.log(err)
+    return;
   }
 }
 
@@ -791,11 +857,11 @@ async function getNextPage(page, inventoryType) {
   }
 }
 
-function isNewListings(listingsData, newListings) {
-  const urlSet = new Set(listingsData.map(listing => listing?.url));
-  const newListingsUrls = newListings.map(listing => listing?.url);
-  return newListingsUrls.some(url => !urlSet.has(url));
-
+function isNewListings(oldListingsData, newListingsData) {
+  const oldListingsSet = new Set(oldListingsData.map((elem) => elem?.listing));
+  console.log('new listings', newListingsData.filter((newListing) => !oldListingsSet.has(newListing?.listing)).map(elem => elem.listing))
+  console.log('old listings set', oldListingsSet)
+  return newListingsData.some((newListing) => !oldListingsSet.has(newListing?.listing));
 }
 
 /**
@@ -812,7 +878,7 @@ async function allPageListings(page, inventoryType, listingsData = []) {
     const url= page.url();
     console.log("getting listings on:", url);
     
-    const listings = await pageListings(page, { getImgs: true })
+    const listings = await pageListings(page)
 
     // Add listings to the accumulator
     if (listings) {
@@ -831,10 +897,11 @@ async function allPageListings(page, inventoryType, listingsData = []) {
     }
 
     console.log("Next page loaded")
-    const nextPageListings = await pageListings(nextPage);
-    let listingsDiff = isNewListings(listingsData, nextPageListings);
+    const nextPageListingsData = await pageListings(nextPage);
+    let listingsDiff = isNewListings(listingsData, nextPageListingsData);
     // Compare the current page listings to the next page listings
     // Keep searching if they are different
+    console.log('different listings?', listingsDiff)
     if (listingsDiff) {
       await allPageListings(nextPage, inventoryType, listingsData);
     }

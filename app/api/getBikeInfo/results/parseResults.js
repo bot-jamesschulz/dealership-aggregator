@@ -1,7 +1,7 @@
 const fs = require('fs');
 const makes = require('./bikeData/makesRegexes.json');
 const findModel = require('./findModel');
-const listingResults = require('./listings/listingResults1-27_15-42-35.json');
+const listingResults = require('./listings/listingResults/results.json');
 const testListingResults = require('./listingsTest.json');
 const excludedWords = JSON.parse(fs.readFileSync('./sanitizationTesting/excludedWords.json', 'utf-8'));
 const regexToMake = JSON.parse(fs.readFileSync('./bikeData/regexToMake.json', 'utf-8'));
@@ -133,7 +133,8 @@ for (const siteObject of listingResults) {
                         model: listingModel,
                         year: validYear,
                         listing: cleanedListing,
-                        url: url.href
+                        url: url.href,
+                        img: listingData.img
                     })
                 } else {
                     rejectedListings.push(cleanedListing);
@@ -143,7 +144,7 @@ for (const siteObject of listingResults) {
     }
 }
 
-fs.writeFile('./sanitizationTesting/listingsCleanTest1-27_15-42-35.json', JSON.stringify(results) , 'utf-8', (err) => {
+fs.writeFile('./sanitizationTesting/sanitizedResults.json', JSON.stringify(results) , 'utf-8', (err) => {
     if (err) throw err;
     console.log('The file has been saved!');
 });
